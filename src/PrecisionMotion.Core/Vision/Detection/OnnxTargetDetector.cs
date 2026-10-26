@@ -14,6 +14,7 @@ public sealed class OnnxTargetDetector : ITargetDetector
     private readonly int _modelHeight;
     private readonly float _confidenceThreshold;
     private readonly float _iouThreshold;
+    private readonly HashSet<int>? _allowedClassIds;
     private bool _disposed;
 
     public OnnxTargetDetector(
@@ -22,12 +23,14 @@ public sealed class OnnxTargetDetector : ITargetDetector
         int modelHeight = 640,
         float confidenceThreshold = 0.5f,
         float iouThreshold = 0.45f,
+        IEnumerable<int>? allowedClassIds = null,
         SessionOptions? options = null)
     {
         _modelWidth = modelWidth;
         _modelHeight = modelHeight;
         _confidenceThreshold = confidenceThreshold;
         _iouThreshold = iouThreshold;
+        _allowedClassIds = allowedClassIds != null ? new HashSet<int>(allowedClassIds) : null;
 
         var opt = options ?? new SessionOptions
         {
@@ -183,6 +186,11 @@ public sealed class OnnxTargetDetector : ITargetDetector
 
                 if (maxClassScore >= _confidenceThreshold)
                 {
+                    if (_allowedClassIds != null && !_allowedClassIds.Contains(bestClassId))
+                    {
+                        continue;
+                    }
+
                     // Escala de volta para dimensões da imagem original
                     float xRatio = (float)origWidth / _modelWidth;
                     float yRatio = (float)origHeight / _modelHeight;

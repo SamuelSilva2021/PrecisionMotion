@@ -14,6 +14,7 @@ public sealed class VisionPipeline : IAsyncDisposable, IDisposable
     private readonly ISmoother _smoother;
     private readonly CoordinateCalculator _calculator;
     private readonly VisionPipelineConfig _config;
+    private readonly RoiTransformer? _roiTransformer;
 
     private Task? _processingTask;
     private CancellationTokenSource? _cts;
@@ -38,6 +39,15 @@ public sealed class VisionPipeline : IAsyncDisposable, IDisposable
         _smoother = smoother ?? throw new ArgumentNullException(nameof(smoother));
         _calculator = calculator ?? throw new ArgumentNullException(nameof(calculator));
         _config = config ?? throw new ArgumentNullException(nameof(config));
+
+        if (_config.UseRoi)
+        {
+            _roiTransformer = RoiTransformer.CreateCentered(
+                _config.FrameWidth, 
+                _config.FrameHeight, 
+                _config.RoiWidth, 
+                _config.RoiHeight);
+        }
     }
 
     public void Start()
@@ -102,10 +112,43 @@ public sealed class VisionPipeline : IAsyncDisposable, IDisposable
             }
 
             int frameBytes = width * height * 3;
-            var frameMemory = new ReadOnlyMemory<byte>(rentedBuffer, 0, frameBytes);
 
             var inferWatch = Stopwatch.StartNew();
-            var detectedList = await _detector.DetectAsync(frameMemory, width, height, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<DetectedTarget> detectedList;
+
+            if (_config.UseRoi && _roiTransformer != null)
+            {
+                int roiBytes = _roiTransformer.Bounds.Width * _roiTransformer.Bounds.Height * 3;
+                byte[] rentedRoi = ArrayPool<byte>.Shared.Rent(roiBytes);
+                try
+                {
+                    _roiTransformer.ExtractRoi(rentedBuffer.AsSpan(0, frameBytes), width, height, 3, rentedRoi.AsSpan(0, roiBytes));
+                    var roiMemory = new ReadOnlyMemory<byte>(rentedRoi, 0, roiBytes);
+
+                    var roiDetections = await _detector.DetectAsync(
+                        roiMemory, 
+                        _roiTransformer.Bounds.Width, 
+                        _roiTransformer.Bounds.Height, 
+                        cancellationToken).ConfigureAwait(false);
+
+                    var globalDetections = new List<DetectedTarget>(roiDetections.Count);
+                    for (int i = 0; i < roiDetections.Count; i++)
+                    {
+                        globalDetections.Add(_roiTransformer.ToGlobal(roiDetections[i]));
+                    }
+                    detectedList = globalDetections;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rentedRoi);
+                }
+            }
+            else
+            {
+                var frameMemory = new ReadOnlyMemory<byte>(rentedBuffer, 0, frameBytes);
+                detectedList = await _detector.DetectAsync(frameMemory, width, height, cancellationToken).ConfigureAwait(false);
+            }
+
             inferWatch.Stop();
 
             var procWatch = Stopwatch.StartNew();

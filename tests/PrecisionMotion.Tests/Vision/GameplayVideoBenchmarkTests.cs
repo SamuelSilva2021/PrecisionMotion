@@ -156,13 +156,17 @@ public class GameplayVideoBenchmarkTests
         }
 
         string outputDatasetDir = Path.Combine(solutionRoot, "dataset_pubg");
-        _output.WriteLine($"Iniciando extração do dataset para: {outputDatasetDir}");
+        if (Directory.Exists(outputDatasetDir))
+        {
+            Directory.Delete(outputDatasetDir, true);
+        }
+        _output.WriteLine($"Iniciando extração limpa e focada em combate para: {outputDatasetDir}");
 
         using var detector = new OnnxTargetDetector(
             modelPath: modelPath,
             modelWidth: 640,
             modelHeight: 640,
-            confidenceThreshold: 0.35f,
+            confidenceThreshold: 0.45f,
             allowedClassIds: new[] { 0 });
 
         var config = new VisionPipelineConfig
@@ -170,29 +174,32 @@ public class GameplayVideoBenchmarkTests
             UseRoi = true,
             RoiWidth = 640,
             RoiHeight = 640,
-            MinimumConfidence = 0.35f
+            MinimumConfidence = 0.45f
         };
 
         var extractor = new DatasetExtractor(detector, config);
         int totalSaved = 0;
-        int maxTotalFrames = 100;
+        int maxTotalFrames = 60; // 60 frames de alta precisão
 
         foreach (var video in videoFiles)
         {
             if (totalSaved >= maxTotalFrames) break;
 
-            _output.WriteLine($"Processando vídeo: {Path.GetFileName(video)}...");
+            _output.WriteLine($"Processando combate em: {Path.GetFileName(video)}...");
 
             int remaining = maxTotalFrames - totalSaved;
             int savedFromVideo = await extractor.ExtractDatasetFromVideoAsync(
                 videoPath: video,
                 outputDatasetDir: outputDatasetDir,
-                sampleIntervalFrames: 10,
+                sampleIntervalFrames: 6,
                 onlySaveFramesWithDetections: true,
-                maxFramesToSave: remaining);
+                maxFramesToSave: remaining,
+                lastSecondsOnly: 15,
+                excludePlayerWeaponZone: true,
+                generateHeadAnnotations: true);
 
             totalSaved += savedFromVideo;
-            _output.WriteLine($"  -> Extraídos {savedFromVideo} quadros deste vídeo. (Total acumulado: {totalSaved})");
+            _output.WriteLine($"  -> Extraídos {savedFromVideo} quadros reais de combate. (Total acumulado: {totalSaved})");
         }
 
         _output.WriteLine("====================================================");

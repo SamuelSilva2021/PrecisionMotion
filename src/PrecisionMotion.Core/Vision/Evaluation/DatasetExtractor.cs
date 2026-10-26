@@ -24,9 +24,12 @@ public sealed class DatasetExtractor
     public async Task<int> ExtractDatasetFromVideoAsync(
         string videoPath,
         string outputDatasetDir,
-        int sampleIntervalFrames = 15,
+        int sampleIntervalFrames = 6,
         bool onlySaveFramesWithDetections = true,
-        int maxFramesToSave = 200,
+        int maxFramesToSave = 100,
+        int lastSecondsOnly = 12, // Analisa apenas os últimos 12 segundos onde o combate/kill acontece
+        bool excludePlayerWeaponZone = true,
+        bool generateHeadAnnotations = true,
         CancellationToken cancellationToken = default)
     {
         if (!File.Exists(videoPath))
@@ -46,8 +49,19 @@ public sealed class DatasetExtractor
 
         int width = videoSource.Width;
         int height = videoSource.Height;
+        double fps = videoSource.Fps > 0 ? videoSource.Fps : 60.0;
+        int totalFrames = videoSource.FrameCount;
+
+        // Foca a extração nos últimos segundos do clipe (momento da troca de tiro / kill)
+        int combatStartFrame = 0;
+        if (lastSecondsOnly > 0 && totalFrames > 0)
+        {
+            int framesInCombat = (int)(lastSecondsOnly * fps);
+            combatStartFrame = Math.Max(0, totalFrames - framesInCombat);
+        }
+
         int savedCount = 0;
-        int frameIndex = 0;
+        int currentFrame = 0;
 
         byte[] frameBuffer = new byte[width * height * 3];
         var roi = _config.UseRoi 
@@ -57,9 +71,15 @@ public sealed class DatasetExtractor
         while (videoSource.TryGetNextFrame(frameBuffer, out int w, out int h, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            frameIndex++;
+            currentFrame++;
 
-            if (frameIndex % sampleIntervalFrames != 0)
+            // Pula o início do clipe (looting, corrida, veículos) e foca na eliminação
+            if (currentFrame < combatStartFrame)
+            {
+                continue;
+            }
+
+            if ((currentFrame - combatStartFrame) % sampleIntervalFrames != 0)
             {
                 continue;
             }
@@ -86,19 +106,33 @@ public sealed class DatasetExtractor
                 detections = await _detector.DetectAsync(frameBuffer, width, height, cancellationToken).ConfigureAwait(false);
             }
 
-            var validDetections = detections.Where(d => d.Confidence >= _config.MinimumConfidence).ToList();
+            // Filtra por confiança e remove alarmes falsos na própria arma do jogador (canto inferior direito)
+            var validDetections = new List<DetectedTarget>();
+            foreach (var d in detections)
+            {
+                if (d.Confidence < _config.MinimumConfidence) continue;
+
+                if (excludePlayerWeaponZone)
+                {
+                    // Se a caixa está colada no fundo da tela à direita (região da própria arma/mãos)
+                    bool isWeaponZone = (d.Box.Y + d.Box.Height > height * 0.72f) && (d.Box.X > width * 0.45f);
+                    if (isWeaponZone) continue;
+                }
+
+                validDetections.Add(d);
+            }
 
             if (onlySaveFramesWithDetections && validDetections.Count == 0)
             {
                 continue;
             }
 
-            string baseName = $"pubg_frame_{frameIndex:D5}";
+            string baseName = $"pubg_combat_f{currentFrame:D5}";
             string imgOutPath = Path.Combine(imagesDir, baseName + ".jpg");
             string labelOutPath = Path.Combine(labelsDir, baseName + ".txt");
             string debugOutPath = Path.Combine(debugDir, baseName + ".jpg");
 
-            // 1. Salva imagem
+            // 1. Salva imagem em alta resolução
             using (var mat = new Mat(height, width, MatType.CV_8UC3))
             {
                 unsafe
@@ -113,7 +147,7 @@ public sealed class DatasetExtractor
                 Cv2.ImWrite(debugOutPath, annotated);
             }
 
-            // 2. Salva anotação no formato YOLO normalizado
+            // 2. Salva anotação no formato YOLO normalizado (0: body, 1: head)
             var sb = new StringBuilder();
             foreach (var det in validDetections)
             {
@@ -123,9 +157,20 @@ public sealed class DatasetExtractor
                 float wNorm = box.Width / width;
                 float hNorm = box.Height / height;
 
-                // Formato YOLO: <class_id> <x_center> <y_center> <width> <height>
+                // Classe 0: Corpo do Alvo (Body)
                 sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0} {1:F6} {2:F6} {3:F6} {4:F6}",
                     0, xCenter, yCenter, wNorm, hNorm));
+
+                if (generateHeadAnnotations)
+                {
+                    // Classe 1: Cabeça (Head) - terço superior centralizado
+                    float headW = (box.Width * 0.45f) / width;
+                    float headH = (box.Height * 0.22f) / height;
+                    float headYCenter = (box.Y + (box.Height * 0.12f)) / height;
+
+                    sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0} {1:F6} {2:F6} {3:F6} {4:F6}",
+                        1, xCenter, headYCenter, headW, headH));
+                }
             }
 
             await File.WriteAllTextAsync(labelOutPath, sb.ToString(), cancellationToken).ConfigureAwait(false);
@@ -138,21 +183,24 @@ public sealed class DatasetExtractor
         }
 
         // 3. Gera arquivo data.yaml pronto para treino
-        string yamlContent = GenerateDataYaml(outputDatasetDir);
+        string yamlContent = GenerateDataYaml(outputDatasetDir, generateHeadAnnotations);
         await File.WriteAllTextAsync(Path.Combine(outputDatasetDir, "data.yaml"), yamlContent, cancellationToken).ConfigureAwait(false);
 
         return savedCount;
     }
 
-    private static string GenerateDataYaml(string datasetRoot)
+    private static string GenerateDataYaml(string datasetRoot, bool hasHeadClass)
     {
+        string classes = hasHeadClass 
+            ? "  0: body\n  1: head\n" 
+            : "  0: target\n";
+
         return $@"# Configuração do Dataset PUBG para YOLO (Treinamento / Fine-Tuning)
 path: {datasetRoot.Replace('\\', '/')}
 train: images/train
 val: images/train
 
 names:
-  0: target
-";
+{classes}";
     }
 }

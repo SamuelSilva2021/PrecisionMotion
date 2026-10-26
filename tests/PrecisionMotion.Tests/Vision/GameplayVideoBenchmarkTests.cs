@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using FluentAssertions;
 using PrecisionMotion.Core.Vision.Detection;
+using PrecisionMotion.Core.Vision.Evaluation;
 using PrecisionMotion.Core.Vision.Mathematics;
 using PrecisionMotion.Core.Vision.Models;
 using PrecisionMotion.Core.Vision.Pipeline;
@@ -126,5 +127,83 @@ public class GameplayVideoBenchmarkTests
         _output.WriteLine("========================================");
 
         totalProcessed.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task ExtractDataset_FromUserHighlightVideos()
+    {
+        string solutionRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        string modelPath = Path.Combine(solutionRoot, "models", "yolo11n.onnx");
+
+        if (!File.Exists(modelPath))
+        {
+            _output.WriteLine("Modelo ONNX não encontrado. Pulando extração.");
+            return;
+        }
+
+        string videoDir = @"C:\Users\samue\Videos\NVIDIAPLAYERUNKNOWN'S BATTLEGROUNDS";
+        if (!Directory.Exists(videoDir))
+        {
+            _output.WriteLine("Diretório de vídeos não encontrado. Pulando extração.");
+            return;
+        }
+
+        var videoFiles = Directory.GetFiles(videoDir, "*.mp4");
+        if (videoFiles.Length == 0)
+        {
+            _output.WriteLine("Nenhum arquivo de vídeo encontrado.");
+            return;
+        }
+
+        string outputDatasetDir = Path.Combine(solutionRoot, "dataset_pubg");
+        _output.WriteLine($"Iniciando extração do dataset para: {outputDatasetDir}");
+
+        using var detector = new OnnxTargetDetector(
+            modelPath: modelPath,
+            modelWidth: 640,
+            modelHeight: 640,
+            confidenceThreshold: 0.35f,
+            allowedClassIds: new[] { 0 });
+
+        var config = new VisionPipelineConfig
+        {
+            UseRoi = true,
+            RoiWidth = 640,
+            RoiHeight = 640,
+            MinimumConfidence = 0.35f
+        };
+
+        var extractor = new DatasetExtractor(detector, config);
+        int totalSaved = 0;
+        int maxTotalFrames = 100;
+
+        foreach (var video in videoFiles)
+        {
+            if (totalSaved >= maxTotalFrames) break;
+
+            _output.WriteLine($"Processando vídeo: {Path.GetFileName(video)}...");
+
+            int remaining = maxTotalFrames - totalSaved;
+            int savedFromVideo = await extractor.ExtractDatasetFromVideoAsync(
+                videoPath: video,
+                outputDatasetDir: outputDatasetDir,
+                sampleIntervalFrames: 10,
+                onlySaveFramesWithDetections: true,
+                maxFramesToSave: remaining);
+
+            totalSaved += savedFromVideo;
+            _output.WriteLine($"  -> Extraídos {savedFromVideo} quadros deste vídeo. (Total acumulado: {totalSaved})");
+        }
+
+        _output.WriteLine("====================================================");
+        _output.WriteLine($"Extração concluída com sucesso!");
+        _output.WriteLine($"Total de Imagens e Rótulos salvos: {totalSaved}");
+        _output.WriteLine($"Diretório: {outputDatasetDir}");
+        _output.WriteLine($"Imagens: {Path.Combine(outputDatasetDir, "images", "train")}");
+        _output.WriteLine($"Rótulos: {Path.Combine(outputDatasetDir, "labels", "train")}");
+        _output.WriteLine($"Visualização Anotada: {Path.Combine(outputDatasetDir, "debug_annotated")}");
+        _output.WriteLine("====================================================");
+
+        totalSaved.Should().BeGreaterThan(0);
     }
 }

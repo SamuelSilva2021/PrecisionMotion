@@ -1,0 +1,49 @@
+<Window x:Class="PrecisionMotion.UI.SplashScreen"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Iniciando Precision Motion"
+        Height="280" Width="460"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStartupLocation="CenterScreen">
+    <Border Background="{StaticResource SurfaceBrush}"
+            BorderBrush="{StaticResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="12">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="20" ShadowDepth="4" Direction="270" Opacity="0.4"/>
+        </Border.Effect>
+        <Grid Margin="32">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Brand Icon and Title -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Width="38" Height="38" Background="{StaticResource AccentBrush}" CornerRadius="8" Margin="0,0,14,0">
+                    <TextBlock Text="⚡" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White"/>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Precision Motion" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <TextBlock Text="Calibração de Movimento &amp; Dinâmica Espacial" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Status message -->
+            <TextBlock x:Name="StatusText" Grid.Row="3" Text="Carregando perfis e drivers..." 
+                       FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,8"/>
+
+            <!-- Progress Bar -->
+            <Grid Grid.Row="4" Height="8">
+                <Border Background="#222634" CornerRadius="4"/>
+                <ProgressBar x:Name="ProgressBar" Height="8" Minimum="0" Maximum="100" Value="0"
+                             Foreground="{StaticResource AccentBrush}" BorderThickness="0" Background="Transparent"/>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

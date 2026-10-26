@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PrecisionMotion.Core/PrecisionMotion.Core.csproj" />
+    <Project Path="src/PrecisionMotion.Launcher/PrecisionMotion.Launcher.csproj" />
+    <Project Path="src/PrecisionMotion.UI/PrecisionMotion.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PrecisionMotion.Tests/PrecisionMotion.Tests.csproj" />
+  </Folder>
+</Solution>

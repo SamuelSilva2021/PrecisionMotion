@@ -1,0 +1,327 @@
+﻿<Window x:Class="PrecisionMotion.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Precision Motion - Studio de Calibração"
+        Height="780" Width="1200"
+        MinHeight="650" MinWidth="1000"
+        Background="{StaticResource BgBrush}"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="240"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Sidebar Navigation -->
+        <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+            <Grid Margin="16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- App Brand -->
+                <StackPanel Grid.Row="0" Margin="0,8,0,24">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="32" Height="32" Background="{StaticResource AccentBrush}" CornerRadius="6" Margin="0,0,10,0">
+                            <TextBlock Text="⚡" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Precision Motion" FontSize="17" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                            <TextBlock Text="Controle &amp; Dinâmica" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Navigation Tabs -->
+                <StackPanel Grid.Row="1">
+                    <RadioButton x:Name="TabMainBtn" Style="{StaticResource NavButton}" IsChecked="True" Checked="OnTabChanged">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🎛️  Painel Principal" FontSize="15"/>
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="TabWpBtn" Style="{StaticResource NavButton}" Checked="OnTabChanged">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🎯  Calibração de Perfis" FontSize="15"/>
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+
+                <!-- Engine Status and Hotkey info -->
+                <Border Grid.Row="2" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="12" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="#10B981" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="StatusLabel" Text="Motor: Aguardando" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                        </StackPanel>
+                        <TextBlock Text="Atalhos Ativos:" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,2"/>
+                        <TextBlock Text="• F6 : Restaurar Menu" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Text="• F7 : Alternar Mira (Hold/Toggle)" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Text="• F8/F9 : Ajustar Força (-20%/+25%)" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Text="• F10 : Encerrar Tudo" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Main Content Area -->
+        <Grid Grid.Column="1" Margin="24">
+            <!-- View 1: Main Dashboard -->
+            <ScrollViewer x:Name="ViewMain" FontSize="15" VerticalScrollBarVisibility="Auto">
+                <StackPanel MaxWidth="880" HorizontalAlignment="Left">
+                    <!-- Title Bar -->
+                    <TextBlock Text="Painel de Controle Principal" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Configure a resolução de tela, modo da mira e o multiplicador geral de amortecimento." FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+
+                    <!-- Resolutions Card -->
+                    <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" Margin="0,0,0,16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Resolução Ativa do Display" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,12"/>
+                            <WrapPanel x:Name="ResolutionsWrap">
+                                <!-- Populated dynamically or mapped -->
+                                <RadioButton Content="1920x1080" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" IsChecked="True" Tag="1920x1080" Click="OnResolutionSelected"/>
+                                <RadioButton Content="2560x1440" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="2560x1440" Click="OnResolutionSelected"/>
+                                <RadioButton Content="3440x1440" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="3440x1440" Click="OnResolutionSelected"/>
+                                <RadioButton Content="2560x1080" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="2560x1080" Click="OnResolutionSelected"/>
+                                <RadioButton Content="1728x1080" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="1728x1080" Click="OnResolutionSelected"/>
+                                <RadioButton Content="1440x1080" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="1440x1080" Click="OnResolutionSelected"/>
+                                <RadioButton Content="1600x900" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="1600x900" Click="OnResolutionSelected"/>
+                                <RadioButton Content="1366x768" GroupName="Resolutions" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,16,8" Tag="1366x768" Click="OnResolutionSelected"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Aim Mode and Options -->
+                    <Grid Margin="0,0,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="16"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Aim Mode -->
+                        <Border Grid.Column="0" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Modo de Acionamento da Mira" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,12"/>
+                                <RadioButton x:Name="AimHoldRadio" Content="Modo Padrão (Segurar botão direito)" GroupName="AimMode" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8" IsChecked="True" Checked="OnAimModeChanged"/>
+                                <RadioButton x:Name="AimToggleRadio" Content="Modo Alternar (Clique abre / Clique fecha)" GroupName="AimMode" Foreground="{StaticResource TextPrimaryBrush}" Checked="OnAimModeChanged"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Extra Options -->
+                        <Border Grid.Column="2" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Opções Avançadas" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,12"/>
+                                <CheckBox x:Name="CheckSlot2" Content="Monitorar Canal Secundário (Slot 2)" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
+                                <CheckBox x:Name="CheckDmrs" Content="Habilitar Perfis DMRs" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
+                                <CheckBox x:Name="CheckInvertSlots" Content="Inverter Mapeamento de Canais" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
+                                <CheckBox x:Name="CheckSounds" Content="Efeitos Sonoros de Confirmação" Foreground="{StaticResource TextPrimaryBrush}" IsChecked="True"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- Master Calibration Slider -->
+                    <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" Margin="0,0,0,24" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,8">
+                                <TextBlock Text="Calibragem Geral Dinâmica" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                <TextBlock x:Name="BigSliderLabel" Text="100%" FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                            </Grid>
+                            <Slider x:Name="BigSlider" Minimum="10" Maximum="200" Value="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnBigSliderValueChanged"/>
+                            <TextBlock Text="Multiplica uniformemente o ganho de amortecimento para todos os perfis e configurações." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Submit / Start Engine Button -->
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Registrar Calibragem &amp; Iniciar Motor" Style="{StaticResource PrimaryButton}" Padding="20,12" FontSize="16" Click="OnStartEngineClicked"/>
+                        <TextBlock Text="A janela será minimizada em segundo plano. Pressione F6 para reabri-la." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- View 2: Profile Editor (Wp) -->
+            <Grid x:Name="ViewWp" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="220"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Weapons/Profiles List -->
+                <Border Grid.Column="0" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="12" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Selecione o Perfil" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,10"/>
+                        <ListBox x:Name="ProfileListBox" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                                 Foreground="{StaticResource TextPrimaryBrush}" SelectionChanged="OnProfileSelected">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="FontSize" Value="15"/>
+                                    <Setter Property="Padding" Value="10,6"/>
+                                    <Setter Property="Margin" Value="0,1"/>
+                                    <Setter Property="Cursor" Value="Hand"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="#2B3042"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+                    </Grid>
+                </Border>
+
+                <!-- Profile Calibration Sliders Grid (12 Sliders) -->
+                <Border Grid.Column="2" Background="{StaticResource CardBrush}" CornerRadius="8" Padding="20" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock x:Name="SelectedProfileHeader" Text="Perfil Selecionado: M416" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Text="Ajuste os parâmetros balísticos e os multiplicadores de cada visor óptico." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="24"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Column 1 -->
+                                <StackPanel Grid.Column="0">
+                                    <!-- Base Individual -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Multiplicador Base (Perfil)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="ValArma" Text="1.00" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderArma" Minimum="0.1" Maximum="3.0" Value="1.0" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Standard Posture -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Postura Padrão (Em Pé)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="ValEmPe" Text="-0.02" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderEmPe" Minimum="-1.0" Maximum="1.0" Value="-0.02" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Low Profile Posture -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Postura Baixa (Agachado)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="ValAgachado" Text="-0.15" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderAgachado" Minimum="-1.0" Maximum="1.0" Value="-0.15" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Iron Sight -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Padrão (Ferro)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="ValFerro" Text="1.00" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderFerro" Minimum="0.1" Maximum="5.0" Value="1.0" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Scope 1x -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Óptico 1x" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="Val1x" Text="1.00" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="Slider1x" Minimum="0.1" Maximum="5.0" Value="1.0" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Holo -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Holográfico" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="ValHolo" Text="1.00" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderHolo" Minimum="0.1" Maximum="5.0" Value="1.0" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Column 2 -->
+                                <StackPanel Grid.Column="2">
+                                    <!-- Scope 2x -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Óptico 2x" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="Val2x" Text="1.75" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="Slider2x" Minimum="0.1" Maximum="5.0" Value="1.75" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Scope 3x -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Óptico 3x" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="Val3x" Text="2.10" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="Slider3x" Minimum="0.1" Maximum="5.0" Value="2.10" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Scope 4x -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Óptico 4x" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="Val4x" Text="2.70" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="Slider4x" Minimum="0.1" Maximum="5.0" Value="2.70" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Scope 6x -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Óptico 6x" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="Val6x" Text="3.60" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="Slider6x" Minimum="0.1" Maximum="5.0" Value="3.60" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Scope 8x -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Óptico 8x" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="Val8x" Text="4.20" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="Slider8x" Minimum="0.1" Maximum="5.0" Value="4.20" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+
+                                    <!-- Scope Termica -->
+                                    <StackPanel Margin="0,0,0,16">
+                                        <Grid Margin="0,0,0,4">
+                                            <TextBlock Text="Visor Térmico" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock x:Name="ValTermica" Text="1.00" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderTermica" Minimum="0.1" Maximum="5.0" Value="1.0" SmallChange="0.01" ValueChanged="OnSliderChanged"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

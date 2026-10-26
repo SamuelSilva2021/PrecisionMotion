@@ -213,4 +213,92 @@ public class GameplayVideoBenchmarkTests
 
         totalSaved.Should().BeGreaterThan(0);
     }
+
+    [Fact]
+    public async Task Benchmark_CustomPubgModel_OnRealVideo()
+    {
+        string solutionRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        string modelPath = Path.Combine(solutionRoot, "models", "pubg_trained.onnx");
+
+        if (!File.Exists(modelPath))
+        {
+            _output.WriteLine($"Modelo treinado não encontrado em: {modelPath}. Pulando teste.");
+            return;
+        }
+
+        string videoDir = @"C:\Users\samue\Videos\NVIDIAPLAYERUNKNOWN'S BATTLEGROUNDS";
+        string? videoPath = Directory.GetFiles(videoDir, "*.mp4").FirstOrDefault();
+
+        if (string.IsNullOrEmpty(videoPath))
+        {
+            _output.WriteLine("Nenhum vídeo .mp4 encontrado.");
+            return;
+        }
+
+        _output.WriteLine($"Iniciando Benchmark com Modelo Customizado PUBG: {Path.GetFileName(videoPath)}");
+        _output.WriteLine("Modelo: pubg_trained.onnx (YOLO26s treinado com precisão 91.7%)");
+
+        using var videoSource = new VideoFileFrameSource(videoPath, loop: false);
+
+        // O modelo treinado possui 2 classes: 0 = body, 1 = head
+        using var detector = new OnnxTargetDetector(
+            modelPath: modelPath,
+            modelWidth: 640,
+            modelHeight: 640,
+            confidenceThreshold: 0.35f,
+            iouThreshold: 0.45f); // Detecta todas as classes treinadas
+
+        var config = new VisionPipelineConfig
+        {
+            FrameWidth = videoSource.Width,
+            FrameHeight = videoSource.Height,
+            ReferencePoint = (videoSource.Width / 2f, videoSource.Height / 2f),
+            UseRoi = true,
+            RoiWidth = 640,
+            RoiHeight = 640,
+            MinimumConfidence = 0.35f
+        };
+
+        var selector = new ClosestToCrosshairSelector();
+        var smoother = new ExponentialMovingAverageSmoother(0.45f, 0.25);
+        var calculator = new CoordinateCalculator(config.FrameWidth, config.FrameHeight);
+
+        await using var pipeline = new VisionPipeline(videoSource, detector, selector, smoother, calculator, config);
+
+        int totalProcessed = 0;
+        int detectedCount = 0;
+        double totalInferMs = 0;
+
+        using var cts = new CancellationTokenSource();
+        int maxFrames = 100;
+
+        for (int frameIdx = 0; frameIdx < maxFrames; frameIdx++)
+        {
+            var result = await pipeline.ProcessSingleFrameAsync(cts.Token);
+            if (result.Metrics.TotalLatencyMs <= 0 && result.SelectedTarget == null) break;
+
+            totalProcessed++;
+            totalInferMs += result.Metrics.InferenceLatencyMs;
+
+            if (result.SelectedTarget.HasValue)
+            {
+                detectedCount++;
+                var t = result.SelectedTarget.Value;
+                string className = t.Target.ClassId == 1 ? "HEAD" : "BODY";
+                _output.WriteLine($"[Frame {frameIdx:D3}] [{className}] Confiança: {t.Target.Confidence:P0} | Posição: ({t.EstimatedHead.X:F1}, {t.EstimatedHead.Y:F1}) | Inferência: {result.Metrics.InferenceLatencyMs:F1}ms");
+            }
+        }
+
+        double avgInferMs = totalProcessed > 0 ? totalInferMs / totalProcessed : 0;
+        double fps = avgInferMs > 0 ? 1000.0 / avgInferMs : 0;
+
+        _output.WriteLine("=================================================");
+        _output.WriteLine($"Total de Quadros Analisados: {totalProcessed}");
+        _output.WriteLine($"Detecções com Modelo Customizado: {detectedCount}");
+        _output.WriteLine($"Latência Média: {avgInferMs:F2} ms");
+        _output.WriteLine($"Throughput Estimado: {fps:F1} FPS");
+        _output.WriteLine("=================================================");
+
+        totalProcessed.Should().BeGreaterThan(0);
+    }
 }

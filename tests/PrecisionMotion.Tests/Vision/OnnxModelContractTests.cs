@@ -29,7 +29,7 @@ public sealed class OnnxModelContractTests
         _output.WriteLine($"Model: {modelFile}");
         _output.WriteLine($"Input: {input.Key} [{string.Join(", ", inputShape)}]");
         Assert.Equal(4, inputShape.Length);
-        Assert.Equal(1, inputShape[1] == 3 ? 1 : 0);
+        Assert.Equal(3, inputShape[1]);
         Assert.True(inputShape[2] == 640 || inputShape[2] == -1);
         Assert.True(inputShape[3] == 640 || inputShape[3] == -1);
 

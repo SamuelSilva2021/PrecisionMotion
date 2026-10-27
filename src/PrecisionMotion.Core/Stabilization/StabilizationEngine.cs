@@ -15,6 +15,12 @@ public sealed class StabilizationEngine : IDisposable
     private const double PadraoAgachado = -0.15;
     private const double GainMin = 10.0;
     private const double GainMax = 2000.0;
+    private const int StableReadsRequired = 3;
+    private const int InventoryPollMs = 50;
+    private const double InventoryMaxSeconds = 120.0;
+
+    private readonly record struct SlotAttachments(string? Optic, string? Component1, string? Component2);
+    private readonly record struct InventoryReading(string? Profile1, string? Profile2, SlotAttachments Slot1, SlotAttachments Slot2);
 
     private static readonly int[] ResetKeys = {
         NativeMethods.VK_1, NativeMethods.VK_2, NativeMethods.VK_3, NativeMethods.VK_4, NativeMethods.VK_5,
@@ -287,40 +293,42 @@ public sealed class StabilizationEngine : IDisposable
         var bounding = new ScreenRegion(Math.Max(minX, 0), Math.Max(minY, 0), maxX - minX, maxY - minY);
 
         var stopwatch = Stopwatch.StartNew();
-        string? appliedSlot1 = null;
-        string? appliedSlot2 = null;
-        int consecutiveMatches = 0;
+        InventoryReading? last = null;
+        InventoryReading? applied = null;
+        int stableReads = 0;
+        bool inventorySeen = false;
+        double lastVisibleAt = 0.0;
 
-        while (IsRunning && stopwatch.Elapsed.TotalSeconds < 10.0)
+        // A sessão acompanha o inventário enquanto ele estiver aberto: trocas de arma/anexo feitas
+        // depois da primeira leitura também são aplicadas, sem depender de um novo TAB.
+        while (IsRunning && stopwatch.Elapsed.TotalSeconds < InventoryMaxSeconds)
         {
+            double elapsed = stopwatch.Elapsed.TotalSeconds;
+
             Recognizer.StartCache(bounding);
             try
             {
-                string? p1 = Config.Slot1Area.HasValue ? Recognizer.MatchProfile(Config.Slot1Area.Value) : null;
-                string? p2 = Config.Slot2Area.HasValue ? Recognizer.MatchProfile(Config.Slot2Area.Value) : null;
+                var reading = ReadInventory();
 
-                if (p1 == null && p2 == null)
+                if (reading.Profile1 == null && reading.Profile2 == null)
                 {
-                    if (stopwatch.Elapsed.TotalSeconds >= waitOpen)
+                    last = null;
+                    stableReads = 0;
+                    if (elapsed - lastVisibleAt >= (inventorySeen ? waitClose : waitOpen))
                         break;
-                    Thread.Sleep(20);
-                    continue;
-                }
-
-                if (p1 == appliedSlot1 && p2 == appliedSlot2)
-                {
-                    consecutiveMatches++;
-                    if (consecutiveMatches >= 2)
-                    {
-                        ApplyInventoryState(p1, p2);
-                        break;
-                    }
                 }
                 else
                 {
-                    appliedSlot1 = p1;
-                    appliedSlot2 = p2;
-                    consecutiveMatches = 1;
+                    inventorySeen = true;
+                    lastVisibleAt = elapsed;
+                    stableReads = reading == last ? stableReads + 1 : 1;
+                    last = reading;
+
+                    if (stableReads >= StableReadsRequired && reading != applied)
+                    {
+                        ApplyInventoryState(reading);
+                        applied = reading;
+                    }
                 }
             }
             finally
@@ -328,70 +336,87 @@ public sealed class StabilizationEngine : IDisposable
                 Recognizer.ClearCache();
             }
 
-            Thread.Sleep(20);
+            Thread.Sleep(InventoryPollMs);
         }
     }
 
-    private void ApplyInventoryState(string? p1, string? p2)
+    private InventoryReading ReadInventory()
+    {
+        string? p1 = Config.Slot1Area.HasValue ? Recognizer.MatchProfile(Config.Slot1Area.Value) : null;
+        string? p2 = Config.Slot2Area.HasValue ? Recognizer.MatchProfile(Config.Slot2Area.Value) : null;
+
+        // Anexos só entram na leitura de um slot cuja arma foi reconhecida, para não misturar
+        // anexos novos com o perfil antigo.
+        var s1 = p1 != null ? DetectAttachmentsForSlot(1) : default;
+        var s2 = p2 != null ? DetectAttachmentsForSlot(2) : default;
+        return new InventoryReading(p1, p2, s1, s2);
+    }
+
+    private void ApplyInventoryState(InventoryReading reading)
     {
         bool changed = false;
 
-        if (!string.IsNullOrEmpty(p1) && p1 != Slot1Profile)
+        if (!string.IsNullOrEmpty(reading.Profile1))
         {
-            if (_initialReadCompleted && (Slot1Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot1Profile)))
-                ActiveSlot = 1;
+            if (reading.Profile1 != Slot1Profile)
+            {
+                if (_initialReadCompleted && (Slot1Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot1Profile)))
+                    ActiveSlot = 1;
 
-            Slot1Profile = p1;
-            changed = true;
+                changed = true;
+            }
+
+            Slot1Optic = reading.Slot1.Optic ?? "";
+            Slot1Component1 = reading.Slot1.Component1;
+            Slot1Component2 = reading.Slot1.Component2;
+            Slot1Profile = reading.Profile1;
         }
 
-        if (!string.IsNullOrEmpty(p2) && p2 != Slot2Profile)
+        if (!string.IsNullOrEmpty(reading.Profile2))
         {
-            if (_initialReadCompleted && (Slot2Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot2Profile)))
-                ActiveSlot = 2;
+            if (reading.Profile2 != Slot2Profile)
+            {
+                if (_initialReadCompleted && (Slot2Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot2Profile)))
+                    ActiveSlot = 2;
 
-            Slot2Profile = p2;
-            changed = true;
+                changed = true;
+            }
+
+            Slot2Optic = reading.Slot2.Optic ?? "";
+            Slot2Component1 = reading.Slot2.Component1;
+            Slot2Component2 = reading.Slot2.Component2;
+            Slot2Profile = reading.Profile2;
         }
-
-        // Detect optics and accessories
-        DetectAttachmentsForSlot(1);
-        DetectAttachmentsForSlot(2);
 
         _initialReadCompleted = true;
+        SaveSessionState();
         if (changed)
-        {
-            SaveSessionState();
             Log($"[Inventory] Atualizado -> Slot 1: {Slot1Profile} ({Slot1Optic}) | Slot 2: {Slot2Profile} ({Slot2Optic}) | Ativo: Slot {ActiveSlot}");
-        }
     }
 
-    private void DetectAttachmentsForSlot(int slot)
+    private SlotAttachments DetectAttachmentsForSlot(int slot)
     {
-        var opticImages = Config.OpticItems.Select(o => o.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-        var comp1Images = Config.ComponentGroup1.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-        var comp2Images = Config.ComponentGroup2.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
+        string? optic = null, comp1 = null, comp2 = null;
 
         if (Config.OpticCandidateAreas.TryGetValue(slot, out var opticAreas) && opticAreas.Count > 0)
         {
-            var (optic, _) = Recognizer.MatchComponentWithScore(opticAreas, opticImages);
-            if (slot == 1) Slot1Optic = optic ?? "";
-            else Slot2Optic = optic ?? "";
+            var images = Config.OpticItems.Select(o => o.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
+            optic = Recognizer.MatchComponentWithScore(opticAreas, images).BestName;
         }
 
         if (Config.Comp1CandidateAreas.TryGetValue(slot, out var comp1Areas) && comp1Areas.Count > 0)
         {
-            var (comp1, _) = Recognizer.MatchComponentWithScore(comp1Areas, comp1Images);
-            if (slot == 1) Slot1Component1 = comp1;
-            else Slot2Component1 = comp1;
+            var images = Config.ComponentGroup1.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
+            comp1 = Recognizer.MatchComponentWithScore(comp1Areas, images).BestName;
         }
 
         if (Config.Comp2CandidateAreas.TryGetValue(slot, out var comp2Areas) && comp2Areas.Count > 0)
         {
-            var (comp2, _) = Recognizer.MatchComponentWithScore(comp2Areas, comp2Images);
-            if (slot == 1) Slot1Component2 = comp2;
-            else Slot2Component2 = comp2;
+            var images = Config.ComponentGroup2.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
+            comp2 = Recognizer.MatchComponentWithScore(comp2Areas, images).BestName;
         }
+
+        return new SlotAttachments(optic, comp1, comp2);
     }
 
     private void StanceLoop()

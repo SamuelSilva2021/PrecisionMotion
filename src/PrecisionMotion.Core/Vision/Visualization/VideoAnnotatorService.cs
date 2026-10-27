@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Buffers;
 using System.Diagnostics;
 using OpenCvSharp;
@@ -103,6 +104,14 @@ public sealed class VideoAnnotatorService
             throw new InvalidOperationException($"Não foi possível inicializar VideoWriter para: {outputVideoPath}");
         }
 
+        string reportPath = Path.ChangeExtension(outputVideoPath, ".detections.csv");
+        string summaryPath = Path.ChangeExtension(outputVideoPath, ".summary.txt");
+        using var report = new StreamWriter(reportPath, false, System.Text.Encoding.UTF8);
+        report.WriteLine("frame,time_seconds,track_id,class_id,confidence,x,y,width,height,inference_ms,roi_enabled");
+        var uniqueIds = new HashSet<int>();
+        int framesWithoutDetections = 0;
+        int longestGap = 0;
+        int currentGap = 0;
         var tracker = new OfflineDetectionTracker();
         var selector = new ClosestToCrosshairSelector();
         var smoother = new ExponentialMovingAverageSmoother(_config.SmoothingAlpha, _config.SmoothingTimeoutSeconds);
@@ -245,15 +254,33 @@ public sealed class VideoAnnotatorService
                     metrics,
                     roiRect);
 
+                if (detectedList.Count == 0)
+                {
+                    framesWithoutDetections++;
+                    currentGap++;
+                    longestGap = Math.Max(longestGap, currentGap);
+                }
+                else
+                {
+                    currentGap = 0;
+                }
+
                 var tracks = tracker.Update(detectedList);
                 foreach (var track in tracks)
                 {
+                    uniqueIds.Add(track.Id);
                     var box = track.Detection.Box;
+                    report.WriteLine(FormattableString.Invariant(
+                        $"{processedFrames},{processedFrames / fps:F3},{track.Id},{track.Detection.ClassId},{track.Detection.Confidence:F4},{box.X:F2},{box.Y:F2},{box.Width:F2},{box.Height:F2},{inferWatch.Elapsed.TotalMilliseconds:F2},{_config.UseRoi}"));
                     int x = Math.Clamp((int)box.X, 0, width - 1);
                     int y = Math.Clamp((int)box.Y - 5, 18, height - 1);
                     Cv2.PutText(annotated, $"ID {track.Id} | {track.Detection.Confidence:P0} | frames {track.ObservedFrames}",
                         new Point(x, y), HersheyFonts.HersheySimplex, 0.5, new Scalar(255, 255, 0), 2);
                 }
+
+                if (tracks.Count == 0)
+                    report.WriteLine(FormattableString.Invariant(
+                        $"{processedFrames},{processedFrames / fps:F3},,,0,,,,,{inferWatch.Elapsed.TotalMilliseconds:F2},{_config.UseRoi}"));
 
                 writer.Write(annotated);
                 processedFrames++;
@@ -284,6 +311,22 @@ public sealed class VideoAnnotatorService
         overallStopwatch.Stop();
         double finalAvgLatency = accumulatedLatencyMs / Math.Max(1, processedFrames);
         double finalAvgFps = processedFrames / Math.Max(0.001, overallStopwatch.Elapsed.TotalSeconds);
+
+        report.Flush();
+        File.WriteAllLines(summaryPath,
+        [
+            $"Input: {inputVideoPath}",
+            $"Output: {outputVideoPath}",
+            $"ROI enabled: {_config.UseRoi}",
+            $"Processed frames: {processedFrames}",
+            $"Frames with no detections: {framesWithoutDetections}",
+            $"Longest consecutive gap: {longestGap}",
+            $"Unique track IDs: {uniqueIds.Count}",
+            $"Detection occurrences: {totalDetections}",
+            $"Average inference latency (ms): {finalAvgLatency.ToString("F2", CultureInfo.InvariantCulture)}",
+            $"Average processing FPS: {finalAvgFps.ToString("F2", CultureInfo.InvariantCulture)}",
+            "Note: Track IDs are heuristic IoU associations, not verified identities."
+        ]);
 
         return new VideoAnnotatorResult(
             ProcessedFrames: processedFrames,

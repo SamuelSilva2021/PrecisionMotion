@@ -35,7 +35,7 @@ public partial class MainWindow : Window
     private string _currentProfile = "M416";
     private bool _suppressSliderEvents;
 
-    private float _visionConfidence = 0.40f;
+    private float _visionConfidence = 0.20f;
     private float _visionNms = 0.45f;
     private CancellationTokenSource? _auditCts;
     private string? _lastGeneratedVideoPath;
@@ -445,44 +445,94 @@ public partial class MainWindow : Window
 
     private void InitializeVisionControls()
     {
-        // Localiza modelo pubg_trained.onnx
-        string basePath = AppDomain.CurrentDomain.BaseDirectory;
-        string[] candidatePaths = {
-            Path.Combine(basePath, "models", "pubg_trained.onnx"),
-            Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "..", "..", "models", "pubg_trained.onnx")),
-            Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "models", "pubg_trained.onnx")),
-            Path.GetFullPath("models/pubg_trained.onnx")
-        };
-
-        foreach (var p in candidatePaths)
-        {
-            if (File.Exists(p))
-            {
-                _modelPath = p;
-                break;
-            }
-        }
-
-        if (string.IsNullOrEmpty(_modelPath) && File.Exists("models/pubg_trained.onnx"))
-        {
-            _modelPath = Path.GetFullPath("models/pubg_trained.onnx");
-        }
+        _modelPath = LocateModelFile("pubg_trained.onnx");
 
         if (File.Exists(_modelPath))
         {
             ModelStatusBadge.Text = "● ONNX Conectado";
             ModelFileLabel.Text = Path.GetFileName(_modelPath);
-            LogVision($"[SISTEMA] Modelo neural carregado: {_modelPath}");
+            LogVision($"[SISTEMA] Modelo neural padrão: {_modelPath}");
         }
         else
         {
-            ModelStatusBadge.Text = "○ Modelo ausente";
-            ModelStatusBadge.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
-            ModelFileLabel.Text = "pubg_trained.onnx não encontrado";
-            LogVision("[AVISO] Arquivo de modelo pubg_trained.onnx não foi encontrado na pasta models/.");
+            // Fallback para yolo11n se pubg_trained não estiver presente
+            _modelPath = LocateModelFile("yolo11n.onnx");
+            if (File.Exists(_modelPath))
+            {
+                ModelStatusBadge.Text = "● ONNX COCO";
+                ModelFileLabel.Text = Path.GetFileName(_modelPath);
+                ArchLabel.Text = "YOLO11n COCO";
+                ClassesLabel.Text = "Pessoa / Silhueta (0)";
+                MapLabel.Text = "Modelo Geral";
+                LogVision($"[SISTEMA] Carregado modelo COCO de fallback: {_modelPath}");
+            }
+            else
+            {
+                ModelStatusBadge.Text = "○ Modelo ausente";
+                ModelStatusBadge.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+                ModelFileLabel.Text = "pubg_trained.onnx não encontrado";
+                LogVision("[AVISO] Arquivo de modelo não foi encontrado na pasta models/.");
+            }
         }
 
         PopulateVideoList();
+    }
+
+    private string LocateModelFile(string fileName)
+    {
+        string basePath = AppDomain.CurrentDomain.BaseDirectory;
+        string[] candidatePaths = {
+            Path.Combine(basePath, "models", fileName),
+            Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "..", "..", "models", fileName)),
+            Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "models", fileName)),
+            Path.GetFullPath(Path.Combine("models", fileName))
+        };
+
+        foreach (var p in candidatePaths)
+        {
+            if (File.Exists(p)) return p;
+        }
+
+        return Path.Combine("models", fileName);
+    }
+
+    private void OnModelSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (ModelSelectCombo?.SelectedItem is not ComboBoxItem item) return;
+        string tag = item.Tag?.ToString() ?? "custom";
+
+        if (tag == "coco")
+        {
+            string p = LocateModelFile("yolo11n.onnx");
+            if (File.Exists(p))
+            {
+                _modelPath = p;
+                ModelStatusBadge.Text = "● ONNX COCO";
+                ModelFileLabel.Text = Path.GetFileName(p);
+                ArchLabel.Text = "YOLO11n COCO";
+                ClassesLabel.Text = "Pessoa / Silhueta (0)";
+                MapLabel.Text = "Silhuetas / Bonecos";
+                LogVision($"[MODELO] Selecionado modelo Geral COCO: {Path.GetFileName(p)}");
+            }
+            else
+            {
+                LogVision("[AVISO] yolo11n.onnx não encontrado em models/.");
+            }
+        }
+        else
+        {
+            string p = LocateModelFile("pubg_trained.onnx");
+            if (File.Exists(p))
+            {
+                _modelPath = p;
+                ModelStatusBadge.Text = "● ONNX Conectado";
+                ModelFileLabel.Text = Path.GetFileName(p);
+                ArchLabel.Text = "YOLO26s Custom";
+                ClassesLabel.Text = "Corpo (0) | Cabeça (1)";
+                MapLabel.Text = "91.7% / 83.2%";
+                LogVision($"[MODELO] Selecionado modelo Especialista PUBG: {Path.GetFileName(p)}");
+            }
+        }
     }
 
     private void PopulateVideoList()
@@ -582,18 +632,24 @@ public partial class MainWindow : Window
         LogVision($"[DESTINO] {outputVideoPath}");
         AuditProgressStatus.Text = "Inicializando rede neural ONNX...";
 
+        bool isCoco = ModelSelectCombo?.SelectedItem is ComboBoxItem comboItem && comboItem.Tag?.ToString() == "coco";
+        int[] allowedClasses = isCoco ? new[] { 0 } : new[] { 0, 1 };
+        bool useRoi = CheckUseRoi?.IsChecked == true;
+
         try
         {
             var detector = new OnnxTargetDetector(
                 _modelPath,
                 confidenceThreshold: _visionConfidence,
                 iouThreshold: _visionNms,
-                allowedClassIds: new[] { 0, 1 });
+                allowedClassIds: allowedClasses);
 
             var config = new VisionPipelineConfig
             {
                 MinimumConfidence = _visionConfidence,
-                UseRoi = false
+                UseRoi = useRoi,
+                RoiWidth = 640,
+                RoiHeight = 640
             };
 
             var annotator = new VideoAnnotatorService(detector, config);

@@ -348,6 +348,27 @@
                                 <TextBlock x:Name="ModelFileLabel" Text="models/pubg_trained.onnx" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
                             </Grid>
 
+                            <!-- Model Selector Dropdown & ROI Toggle -->
+                            <Grid Margin="0,0,0,14">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="14"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="Selecionar Rede Neural Ativa:" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="ModelSelectCombo" Height="36" VerticalContentAlignment="Center" Background="#181B24" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="{StaticResource BorderBrush}" SelectionChanged="OnModelSelected">
+                                        <ComboBoxItem Content="🎯 YOLO26s PUBG Especialista (Inimigos Reais em Partida)" IsSelected="True" Tag="custom"/>
+                                        <ComboBoxItem Content="🌐 YOLO11n Geral COCO (Silhuetas e Bonecos de Treino)" Tag="coco"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
+                                    <CheckBox x:Name="CheckUseRoi" Content="Focar Região de Mira (ROI 1:1 - Alvos > 50m)" IsChecked="True" Foreground="{StaticResource TextPrimaryBrush}" FontSize="13" Margin="0,0,0,8"/>
+                                </StackPanel>
+                            </Grid>
+
                             <!-- Model specs row -->
                             <Grid Margin="0,0,0,16">
                                 <Grid.ColumnDefinitions>
@@ -359,21 +380,21 @@
                                 <Border Grid.Column="0" Background="#181B24" CornerRadius="6" Padding="12,10" Margin="0,0,6,0">
                                     <StackPanel>
                                         <TextBlock Text="ARQUITETURA" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
-                                        <TextBlock Text="YOLO26s Custom" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,3,0,0"/>
+                                        <TextBlock x:Name="ArchLabel" Text="YOLO26s Custom" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,3,0,0"/>
                                     </StackPanel>
                                 </Border>
 
                                 <Border Grid.Column="1" Background="#181B24" CornerRadius="6" Padding="12,10" Margin="6,0,6,0">
                                     <StackPanel>
                                         <TextBlock Text="CLASSES" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
-                                        <TextBlock Text="Corpo (0) | Cabeça (1)" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,3,0,0"/>
+                                        <TextBlock x:Name="ClassesLabel" Text="Corpo (0) | Cabeça (1)" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,3,0,0"/>
                                     </StackPanel>
                                 </Border>
 
                                 <Border Grid.Column="2" Background="#181B24" CornerRadius="6" Padding="12,10" Margin="6,0,0,0">
                                     <StackPanel>
                                         <TextBlock Text="PRECISÃO / mAP50" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
-                                        <TextBlock Text="91.7% / 83.2%" FontSize="15" FontWeight="SemiBold" Foreground="#60A5FA" Margin="0,3,0,0"/>
+                                        <TextBlock x:Name="MapLabel" Text="91.7% / 83.2%" FontSize="15" FontWeight="SemiBold" Foreground="#60A5FA" Margin="0,3,0,0"/>
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -389,9 +410,9 @@
                                 <StackPanel Grid.Column="0">
                                     <Grid Margin="0,0,0,4">
                                         <TextBlock Text="Confiança Mínima (Threshold)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
-                                        <TextBlock x:Name="VisionConfidenceLabel" Text="40%" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                        <TextBlock x:Name="VisionConfidenceLabel" Text="20%" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
                                     </Grid>
-                                    <Slider x:Name="VisionConfidenceSlider" Minimum="10" Maximum="90" Value="40" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="OnVisionConfidenceChanged"/>
+                                    <Slider x:Name="VisionConfidenceSlider" Minimum="5" Maximum="90" Value="20" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="OnVisionConfidenceChanged"/>
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="2">

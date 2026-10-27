@@ -301,4 +301,65 @@ public class GameplayVideoBenchmarkTests
 
         totalProcessed.Should().BeGreaterThan(0);
     }
+
+    [Fact(Skip = "Diagnóstico específico de clipe sob demanda")]
+    public async Task Diagnose_TrainingGroundVideo()
+    {
+        string videoPath = @"C:\Users\samue\Downloads\Video Project 8.mp4";
+        if (!File.Exists(videoPath)) return;
+
+        string solutionRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        string customModelPath = Path.Combine(solutionRoot, "models", "pubg_trained.onnx");
+        string cocoModelPath = Path.Combine(solutionRoot, "models", "yolo11n.onnx");
+
+        using var src = new VideoFileFrameSource(videoPath, loop: false);
+        _output.WriteLine($"Video: {src.Width}x{src.Height} @ {src.Fps} FPS, Total Frames: {src.FrameCount}");
+
+        using var detCustom = new OnnxTargetDetector(customModelPath, confidenceThreshold: 0.05f, iouThreshold: 0.45f, allowedClassIds: new[] { 0, 1 });
+        using var detCoco = File.Exists(cocoModelPath) 
+            ? new OnnxTargetDetector(cocoModelPath, confidenceThreshold: 0.05f, iouThreshold: 0.45f, allowedClassIds: new[] { 0 }) 
+            : null;
+
+        int w = src.Width;
+        int h = src.Height;
+        byte[] frameBuf = new byte[w * h * 3];
+
+        // Avança até o segundo 2 (~frame 60) onde a mira está travada no alvo
+        for (int i = 0; i < 60; i++)
+        {
+            if (!src.TryGetNextFrame(frameBuf, out _, out _, CancellationToken.None)) break;
+        }
+
+        // 1. Testa ROI 640x640 centrada
+        var roi = RoiTransformer.CreateCentered(w, h, 640, 640);
+        byte[] roiBuf = new byte[640 * 640 * 3];
+        roi.ExtractRoi(frameBuf, w, h, 3, roiBuf);
+
+        // Test with confidence 0.01 (1%)
+        using var det1Pct = new OnnxTargetDetector(customModelPath, confidenceThreshold: 0.01f, iouThreshold: 0.45f, allowedClassIds: new[] { 0, 1 });
+        var customRoi = await det1Pct.DetectAsync(new ReadOnlyMemory<byte>(roiBuf), 640, 640, CancellationToken.None);
+        _output.WriteLine($"Frame 60 ROI [Custom Model (threshold 0.01)]: {customRoi.Count} detections");
+        foreach (var d in customRoi.Take(10))
+            _output.WriteLine($"   Class={d.ClassId}, Conf={d.Confidence:P2}, Box=({d.Box.X:F0},{d.Box.Y:F0},{d.Box.Width:F0},{d.Box.Height:F0})");
+
+        if (detCoco != null)
+        {
+            var config = new VisionPipelineConfig
+            {
+                MinimumConfidence = 0.15f,
+                UseRoi = true,
+                RoiWidth = 640,
+                RoiHeight = 640
+            };
+
+            using var det = new OnnxTargetDetector(cocoModelPath, confidenceThreshold: 0.15f, allowedClassIds: new[] { 0 });
+            var service = new VideoAnnotatorService(det, config);
+            string testOut = Path.Combine(solutionRoot, "auditoria_teste_campo_treino.avi");
+
+            var result = await service.RenderAnnotatedVideoDetailedAsync(videoPath, testOut, maxFrames: 100);
+            _output.WriteLine($"Rendered {result.ProcessedFrames} frames. Total Detections: {result.TotalDetections}");
+            File.Exists(testOut).Should().BeTrue();
+            result.TotalDetections.Should().BeGreaterThan(0);
+        }
+    }
 }

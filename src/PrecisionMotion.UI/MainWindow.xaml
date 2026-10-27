@@ -334,6 +334,7 @@
                     <!-- Title Bar -->
                     <TextBlock Text="Visão Computacional &amp; Telemetria" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
                     <TextBlock Text="Auditoria visual com rede neural ONNX para análise espacial, detecção de alvos e telemetria." FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+                    <CheckBox x:Name="CheckLiveCuda" Content="Usar NVIDIA CUDA (se disponível)" IsChecked="True" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,10"/>
                     <Button Content="Abrir diagnóstico ao vivo (captura de tela, sem controle de entrada)" Click="OnLiveVisionClicked" Padding="14,10" Margin="0,0,0,16" HorizontalAlignment="Left"/>
 
                     <!-- Neural Model Status Card -->

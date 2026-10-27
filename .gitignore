@@ -14,3 +14,5 @@ TestResults/
 .idea/
 .vscode/
 .claude/
+/dataset_pubg
+/runs/detect/predict

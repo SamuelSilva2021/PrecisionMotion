@@ -441,6 +441,21 @@ public partial class MainWindow : Window
             MessageBoxImage.Information);
     }
 
+    private void OnLiveVisionClicked(object sender, RoutedEventArgs e)
+    {
+        if (!File.Exists(_modelPath))
+        {
+            MessageBox.Show("Selecione um modelo ONNX válido antes de iniciar o diagnóstico.");
+            return;
+        }
+
+        var window = new LiveVisionWindow(_modelPath, _visionConfidence, _visionNms)
+        {
+            Owner = this
+        };
+        window.Show();
+    }
+
     #region Visão & Telemetria Handlers
 
     private void InitializeVisionControls()

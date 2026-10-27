@@ -498,6 +498,8 @@ public partial class MainWindow : Window
 
     private void OnModelSelected(object sender, SelectionChangedEventArgs e)
     {
+        // Disparado durante InitializeComponent (IsSelected no XAML), antes dos labels abaixo existirem.
+        if (!IsLoaded) return;
         if (ModelSelectCombo?.SelectedItem is not ComboBoxItem item) return;
         string tag = item.Tag?.ToString() ?? "custom";
 

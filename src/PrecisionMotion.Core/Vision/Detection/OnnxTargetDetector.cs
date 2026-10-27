@@ -87,43 +87,36 @@ public sealed class OnnxTargetDetector : ITargetDetector
     private void PreprocessFrame(ReadOnlySpan<byte> frameSpan, int srcWidth, int srcHeight, Span<float> tensorSpan)
     {
         // Converte e normaliza com resize bilinear simplificado ou nearest neighbor para [1, 3, H, W]
-        float scaleX = (float)srcWidth / _modelWidth;
-        float scaleY = (float)srcHeight / _modelHeight;
+        float scale = Math.Min((float)_modelWidth / srcWidth, (float)_modelHeight / srcHeight);
+        int resizedWidth = Math.Clamp((int)Math.Round(srcWidth * scale), 1, _modelWidth);
+        int resizedHeight = Math.Clamp((int)Math.Round(srcHeight * scale), 1, _modelHeight);
+        int padX = (_modelWidth - resizedWidth) / 2;
+        int padY = (_modelHeight - resizedHeight) / 2;
 
         int channelSize = _modelHeight * _modelWidth;
         int rOffset = 0;
         int gOffset = channelSize;
         int bOffset = channelSize * 2;
 
-        for (int y = 0; y < _modelHeight; y++)
+        tensorSpan.Slice(0, channelSize * 3).Fill(114f / 255f);
+
+        for (int y = 0; y < resizedHeight; y++)
         {
-            int srcY = Math.Min((int)(y * scaleY), srcHeight - 1);
+            int srcY = Math.Min((int)(y / scale), srcHeight - 1);
             int rowOffset = srcY * srcWidth * 3;
 
-            for (int x = 0; x < _modelWidth; x++)
+            for (int x = 0; x < resizedWidth; x++)
             {
-                int srcX = Math.Min((int)(x * scaleX), srcWidth - 1);
-                int pixelOffset = rowOffset + (srcX * 3);
+                int srcX = Math.Min((int)(x / scale), srcWidth - 1);
+                int pixelOffset = rowOffset + srcX * 3;
+                int tensorIndex = (y + padY) * _modelWidth + x + padX;
 
-                int tensorIndex = (y * _modelWidth) + x;
+                if (pixelOffset + 2 >= frameSpan.Length)
+                    continue;
 
-                if (pixelOffset + 2 < frameSpan.Length)
-                {
-                    // Frame assumido como BGR ou RGB - normalizado para [0.0f, 1.0f]
-                    byte b = frameSpan[pixelOffset];
-                    byte g = frameSpan[pixelOffset + 1];
-                    byte r = frameSpan[pixelOffset + 2];
-
-                    tensorSpan[rOffset + tensorIndex] = r / 255.0f;
-                    tensorSpan[gOffset + tensorIndex] = g / 255.0f;
-                    tensorSpan[bOffset + tensorIndex] = b / 255.0f;
-                }
-                else
-                {
-                    tensorSpan[rOffset + tensorIndex] = 0f;
-                    tensorSpan[gOffset + tensorIndex] = 0f;
-                    tensorSpan[bOffset + tensorIndex] = 0f;
-                }
+                tensorSpan[rOffset + tensorIndex] = frameSpan[pixelOffset + 2] / 255f;
+                tensorSpan[gOffset + tensorIndex] = frameSpan[pixelOffset + 1] / 255f;
+                tensorSpan[bOffset + tensorIndex] = frameSpan[pixelOffset] / 255f;
             }
         }
     }
@@ -192,18 +185,21 @@ public sealed class OnnxTargetDetector : ITargetDetector
                     }
 
                     // Escala de volta para dimensões da imagem original
-                    float xRatio = (float)origWidth / _modelWidth;
-                    float yRatio = (float)origHeight / _modelHeight;
+                    float scale = Math.Min((float)_modelWidth / origWidth, (float)_modelHeight / origHeight);
+                    int resizedWidth = Math.Clamp((int)Math.Round(origWidth * scale), 1, _modelWidth);
+                    int resizedHeight = Math.Clamp((int)Math.Round(origHeight * scale), 1, _modelHeight);
+                    int padX = (_modelWidth - resizedWidth) / 2;
+                    int padY = (_modelHeight - resizedHeight) / 2;
 
-                    float realCx = cx * xRatio;
-                    float realCy = cy * yRatio;
-                    float realW = w * xRatio;
-                    float realH = h * yRatio;
+                    float left = Math.Clamp((cx - w / 2f - padX) / scale, 0, origWidth);
+                    float top = Math.Clamp((cy - h / 2f - padY) / scale, 0, origHeight);
+                    float right = Math.Clamp((cx + w / 2f - padX) / scale, 0, origWidth);
+                    float bottom = Math.Clamp((cy + h / 2f - padY) / scale, 0, origHeight);
 
-                    float realX = realCx - (realW / 2f);
-                    float realY = realCy - (realH / 2f);
+                    if (right <= left || bottom <= top)
+                        continue;
 
-                    var box = new BoundingBox(realX, realY, realW, realH);
+                    var box = new BoundingBox(left, top, right - left, bottom - top);
                     detections.Add(new DetectedTarget(box, maxClassScore, bestClassId));
                 }
             }

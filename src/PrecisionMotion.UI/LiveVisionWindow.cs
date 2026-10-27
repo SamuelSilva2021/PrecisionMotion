@@ -74,6 +74,7 @@ public sealed class LiveVisionWindow : Window
             using var source = new DesktopFrameSource();
             using var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL };
             string provider = "CPU";
+            string? cudaFailure = null;
             if (_useCuda)
             {
                 try
@@ -83,7 +84,8 @@ public sealed class LiveVisionWindow : Window
                 }
                 catch (Exception ex)
                 {
-                    await Dispatcher.InvokeAsync(() => _status.Text = $"CUDA indisponível ({ex.Message}). Usando CPU.");
+                    cudaFailure = ex.ToString();
+                    WriteCudaDiagnostic(cudaFailure);
                 }
             }
 
@@ -94,12 +96,15 @@ public sealed class LiveVisionWindow : Window
                     allowedClassIds: System.IO.Path.GetFileName(_modelPath).Equals("yolo11n.onnx", StringComparison.OrdinalIgnoreCase) ? new[] { 0 } : null,
                     options: options);
             }
-            catch (Exception) when (_useCuda && provider == "CUDA")
+            catch (Exception ex) when (_useCuda && provider == "CUDA")
             {
                 provider = "CPU";
+                cudaFailure = ex.ToString();
+                WriteCudaDiagnostic(cudaFailure);
                 detector = new OnnxTargetDetector(_modelPath, confidenceThreshold: _threshold, iouThreshold: _nms,
                     allowedClassIds: System.IO.Path.GetFileName(_modelPath).Equals("yolo11n.onnx", StringComparison.OrdinalIgnoreCase) ? new[] { 0 } : null);
             }
+            string providerStatus = cudaFailure is null ? provider : "CPU (falha CUDA; consulte cuda-diagnostic.log)";
             using (detector)
             {
 
@@ -158,7 +163,7 @@ public sealed class LiveVisionWindow : Window
                             Canvas.SetTop(label, Math.Max(0, box.Y - 22));
                             _annotations.Children.Add(label);
                         }
-                        _status.Text = $"Provider: {provider} | FPS: {fps:F1} | Latência total: {latency:F1} ms | Detecções: {targets.Count} | {System.IO.Path.GetFileName(_modelPath)}";
+                        _status.Text = $"Provider: {providerStatus} | FPS: {fps:F1} | Latência total: {latency:F1} ms | Detecções: {targets.Count} | {System.IO.Path.GetFileName(_modelPath)}";
                     });
                 }
             }
@@ -176,6 +181,21 @@ public sealed class LiveVisionWindow : Window
         finally
         {
             await Dispatcher.InvokeAsync(() => _status.Text += " | Captura encerrada");
+        }
+    }
+
+    private static void WriteCudaDiagnostic(string error)
+    {
+        try
+        {
+            string directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PrecisionMotion");
+            System.IO.Directory.CreateDirectory(directory);
+            string file = System.IO.Path.Combine(directory, "cuda-diagnostic.log");
+            System.IO.File.AppendAllText(file, $"[{DateTimeOffset.Now:O}] CUDA initialization failed:{Environment.NewLine}{error}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Unable to write CUDA diagnostic: {ex}");
         }
     }
 

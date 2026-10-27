@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using PrecisionMotion.Core.Vision.Detection;
+using Microsoft.ML.OnnxRuntime;
 using PrecisionMotion.Core.Vision.Models;
 
 namespace PrecisionMotion.UI;
@@ -16,16 +17,18 @@ public sealed class LiveVisionWindow : Window
     private readonly float _threshold;
     private readonly float _nms;
     private readonly TextBlock _status;
+    private readonly bool _useCuda;
     private readonly Image _preview;
     private readonly Canvas _annotations;
     private CancellationTokenSource? _cts;
     private Task? _worker;
 
-    public LiveVisionWindow(string modelPath, float threshold, float nms)
+    public LiveVisionWindow(string modelPath, float threshold, float nms, bool useCuda = false)
     {
         _modelPath = modelPath;
         _threshold = threshold;
         _nms = nms;
+        _useCuda = useCuda;
         Title = "PrecisionMotion - Diagnóstico ao vivo (somente leitura)";
         Width = 1000;
         Height = 720;
@@ -69,8 +72,36 @@ public sealed class LiveVisionWindow : Window
         try
         {
             using var source = new DesktopFrameSource();
-            using var detector = new OnnxTargetDetector(_modelPath, confidenceThreshold: _threshold, iouThreshold: _nms,
-                allowedClassIds: System.IO.Path.GetFileName(_modelPath).Equals("yolo11n.onnx", StringComparison.OrdinalIgnoreCase) ? new[] { 0 } : null);
+            using var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL };
+            string provider = "CPU";
+            if (_useCuda)
+            {
+                try
+                {
+                    options.AppendExecutionProvider_CUDA(0);
+                    provider = "CUDA";
+                }
+                catch (Exception ex)
+                {
+                    await Dispatcher.InvokeAsync(() => _status.Text = $"CUDA indisponível ({ex.Message}). Usando CPU.");
+                }
+            }
+
+            OnnxTargetDetector detector;
+            try
+            {
+                detector = new OnnxTargetDetector(_modelPath, confidenceThreshold: _threshold, iouThreshold: _nms,
+                    allowedClassIds: System.IO.Path.GetFileName(_modelPath).Equals("yolo11n.onnx", StringComparison.OrdinalIgnoreCase) ? new[] { 0 } : null,
+                    options: options);
+            }
+            catch (Exception) when (_useCuda && provider == "CUDA")
+            {
+                provider = "CPU";
+                detector = new OnnxTargetDetector(_modelPath, confidenceThreshold: _threshold, iouThreshold: _nms,
+                    allowedClassIds: System.IO.Path.GetFileName(_modelPath).Equals("yolo11n.onnx", StringComparison.OrdinalIgnoreCase) ? new[] { 0 } : null);
+            }
+            using (detector)
+            {
 
             int width = source.Width;
             int height = source.Height;
@@ -127,13 +158,14 @@ public sealed class LiveVisionWindow : Window
                             Canvas.SetTop(label, Math.Max(0, box.Y - 22));
                             _annotations.Children.Add(label);
                         }
-                        _status.Text = $"FPS: {fps:F1} | Latência total: {latency:F1} ms | Detecções: {targets.Count} | {System.IO.Path.GetFileName(_modelPath)}";
+                        _status.Text = $"Provider: {provider} | FPS: {fps:F1} | Latência total: {latency:F1} ms | Detecções: {targets.Count} | {System.IO.Path.GetFileName(_modelPath)}";
                     });
                 }
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+            }
             }
         }
         catch (OperationCanceledException) { }

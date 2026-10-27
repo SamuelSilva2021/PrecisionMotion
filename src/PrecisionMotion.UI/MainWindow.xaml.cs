@@ -449,7 +449,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var window = new LiveVisionWindow(_modelPath, _visionConfidence, _visionNms)
+        var window = new LiveVisionWindow(_modelPath, _visionConfidence, _visionNms, CheckLiveCuda.IsChecked == true)
         {
             Owner = this
         };

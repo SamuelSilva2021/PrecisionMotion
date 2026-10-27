@@ -13,4 +13,10 @@
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- WinForms is only used for Screen bounds; its implicit usings clash with WPF types -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
 </Project>

@@ -16,3 +16,4 @@ TestResults/
 .claude/
 dataset_pubg/
 benchmark_output/
+*.avi

@@ -187,7 +187,17 @@
       "sons": true,
       "modo_mira": "segurar",
       "slot2": true,
-      "limiar_mira_visual": 0.75
+      "limiar_mira_visual": 0.75,
+      "limiar_match_perfil": 0.6,
+      "limiar_match_escopo": 0.55,
+      "limiar_match_postura": 0.55,
+      "limiar_match_componente": 0.7,
+      "normalizar_reconhecimento": true,
+      "debug_reconhecimento": false,
+      "debug_salvar_crops": false,
+      "debug_top_n": 3,
+      "debug_intervalo_ms": 1000,
+      "debug_diretorio": "benchmark_output\\recognition_debug"
     }
   ]
 }

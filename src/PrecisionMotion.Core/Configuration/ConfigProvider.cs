@@ -34,6 +34,22 @@ public class ConfigProvider
         ReloadAll();
     }
 
+    private static double ClampThreshold(double value, double fallback)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+            return fallback;
+
+        return Math.Clamp(value, 0.0, 1.0);
+    }
+
+    private static int ClampPositiveInt(int value, int fallback, int min, int max)
+    {
+        if (value < min || value > max)
+            return fallback;
+
+        return value;
+    }
+
     public static string ResolveBaseDirectory(string? preferred)
     {
         if (!string.IsNullOrWhiteSpace(preferred) && Directory.Exists(Path.Combine(preferred, "Configs")))
@@ -117,7 +133,37 @@ public class ConfigProvider
                     GlobalConfig.AimMode = modoProp.GetString()?.ToLowerInvariant() ?? "segurar";
 
                 if (cfg.TryGetProperty("limiar_mira_visual", out var limiarProp))
-                    GlobalConfig.VisualDetectionThreshold = limiarProp.GetDouble();
+                    GlobalConfig.VisualDetectionThreshold = ClampThreshold(limiarProp.GetDouble(), GlobalConfig.VisualDetectionThreshold);
+
+                if (cfg.TryGetProperty("limiar_match_perfil", out var limiarPerfilProp))
+                    GlobalConfig.ProfileMatchThreshold = ClampThreshold(limiarPerfilProp.GetDouble(), GlobalConfig.ProfileMatchThreshold);
+
+                if (cfg.TryGetProperty("limiar_match_escopo", out var limiarEscopoProp))
+                    GlobalConfig.OpticMatchThreshold = ClampThreshold(limiarEscopoProp.GetDouble(), GlobalConfig.OpticMatchThreshold);
+
+                if (cfg.TryGetProperty("limiar_match_postura", out var limiarPosturaProp))
+                    GlobalConfig.StanceMatchThreshold = ClampThreshold(limiarPosturaProp.GetDouble(), GlobalConfig.StanceMatchThreshold);
+
+                if (cfg.TryGetProperty("limiar_match_componente", out var limiarComponenteProp))
+                    GlobalConfig.ComponentMatchThreshold = ClampThreshold(limiarComponenteProp.GetDouble(), GlobalConfig.ComponentMatchThreshold);
+
+                if (cfg.TryGetProperty("normalizar_reconhecimento", out var normalizarProp))
+                    GlobalConfig.NormalizeRecognition = normalizarProp.GetBoolean();
+
+                if (cfg.TryGetProperty("debug_reconhecimento", out var debugProp))
+                    GlobalConfig.RecognitionDebugEnabled = debugProp.GetBoolean();
+
+                if (cfg.TryGetProperty("debug_salvar_crops", out var saveCropsProp))
+                    GlobalConfig.RecognitionDebugSaveCrops = saveCropsProp.GetBoolean();
+
+                if (cfg.TryGetProperty("debug_top_n", out var topNProp))
+                    GlobalConfig.RecognitionDebugTopN = ClampPositiveInt(topNProp.GetInt32(), GlobalConfig.RecognitionDebugTopN, 1, 10);
+
+                if (cfg.TryGetProperty("debug_intervalo_ms", out var debugIntervalProp))
+                    GlobalConfig.RecognitionDebugIntervalMs = ClampPositiveInt(debugIntervalProp.GetInt32(), GlobalConfig.RecognitionDebugIntervalMs, 100, 60000);
+
+                if (cfg.TryGetProperty("debug_diretorio", out var debugDirProp))
+                    GlobalConfig.RecognitionDebugDirectory = debugDirProp.GetString() ?? GlobalConfig.RecognitionDebugDirectory;
 
                 if (cfg.TryGetProperty("sons", out var sonsProp))
                     GlobalConfig.SoundsEnabled = sonsProp.GetBoolean();
@@ -358,6 +404,16 @@ public class ConfigProvider
 
                 cfgObj["modo_mira"] = GlobalConfig.AimMode;
                 cfgObj["limiar_mira_visual"] = GlobalConfig.VisualDetectionThreshold;
+                cfgObj["limiar_match_perfil"] = GlobalConfig.ProfileMatchThreshold;
+                cfgObj["limiar_match_escopo"] = GlobalConfig.OpticMatchThreshold;
+                cfgObj["limiar_match_postura"] = GlobalConfig.StanceMatchThreshold;
+                cfgObj["limiar_match_componente"] = GlobalConfig.ComponentMatchThreshold;
+                cfgObj["normalizar_reconhecimento"] = GlobalConfig.NormalizeRecognition;
+                cfgObj["debug_reconhecimento"] = GlobalConfig.RecognitionDebugEnabled;
+                cfgObj["debug_salvar_crops"] = GlobalConfig.RecognitionDebugSaveCrops;
+                cfgObj["debug_top_n"] = GlobalConfig.RecognitionDebugTopN;
+                cfgObj["debug_intervalo_ms"] = GlobalConfig.RecognitionDebugIntervalMs;
+                cfgObj["debug_diretorio"] = GlobalConfig.RecognitionDebugDirectory;
                 cfgObj["sons"] = GlobalConfig.SoundsEnabled;
                 cfgObj["calibragem"] = GlobalConfig.MasterCalibration;
                 cfgObj["slot2"] = GlobalConfig.SecondarySlotEnabled;

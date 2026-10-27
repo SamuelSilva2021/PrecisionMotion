@@ -58,6 +58,16 @@ public class GlobalConfigData
     public string ActiveResolution { get; set; } = "1920x1080";
     public string AimMode { get; set; } = "segurar"; // "segurar" or "alternar"
     public double VisualDetectionThreshold { get; set; } = 0.75;
+    public double ProfileMatchThreshold { get; set; } = 0.60;
+    public double OpticMatchThreshold { get; set; } = 0.55;
+    public double StanceMatchThreshold { get; set; } = 0.55;
+    public double ComponentMatchThreshold { get; set; } = 0.70;
+    public bool NormalizeRecognition { get; set; } = true;
+    public bool RecognitionDebugEnabled { get; set; } = false;
+    public bool RecognitionDebugSaveCrops { get; set; } = false;
+    public int RecognitionDebugTopN { get; set; } = 3;
+    public int RecognitionDebugIntervalMs { get; set; } = 1000;
+    public string RecognitionDebugDirectory { get; set; } = "benchmark_output\\recognition_debug";
     public bool SoundsEnabled { get; set; } = true;
     public int MasterCalibration { get; set; } = 100;
     public bool SecondarySlotEnabled { get; set; } = false;
@@ -115,4 +125,12 @@ public readonly record struct CalculationResult(
     string Component2Image,
     double DynamicGain,
     double VelocityPxPerSec
+);
+
+public readonly record struct MatchCandidateScore(string Name, double Score);
+
+public sealed record MatchDebugResult(
+    string? BestName,
+    double BestScore,
+    IReadOnlyList<MatchCandidateScore> RankedCandidates
 );

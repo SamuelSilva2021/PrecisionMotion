@@ -29,6 +29,7 @@ public sealed class StabilizationEngine : IDisposable
 
     public ConfigProvider Config { get; }
     public PatternMatcher Recognizer { get; }
+    public RecognitionDiagnostics Diagnostics { get; }
     public DirectInputService InputService { get; }
 
     public bool IsRunning { get; private set; }
@@ -65,7 +66,11 @@ public sealed class StabilizationEngine : IDisposable
     public StabilizationEngine(ConfigProvider config)
     {
         Config = config;
-        Recognizer = new PatternMatcher(config.BaseDirectory, config.GlobalConfig.ActiveResolution);
+        Recognizer = new PatternMatcher(
+            config.BaseDirectory,
+            config.GlobalConfig.ActiveResolution,
+            config.GlobalConfig.NormalizeRecognition);
+        Diagnostics = new RecognitionDiagnostics(config.BaseDirectory, config.GlobalConfig);
         InputService = new DirectInputService();
 
         AimMode = config.GlobalConfig.AimMode;
@@ -342,8 +347,30 @@ public sealed class StabilizationEngine : IDisposable
 
     private InventoryReading ReadInventory()
     {
-        string? p1 = Config.Slot1Area.HasValue ? Recognizer.MatchProfile(Config.Slot1Area.Value) : null;
-        string? p2 = Config.Slot2Area.HasValue ? Recognizer.MatchProfile(Config.Slot2Area.Value) : null;
+        string? p1 = null;
+        string? p2 = null;
+
+        if (Config.Slot1Area.HasValue)
+        {
+            using var frame = Recognizer.CaptureFrame(Config.Slot1Area.Value);
+            var result = Recognizer.MatchProfileDetailedFrame(
+                frame,
+                Config.GlobalConfig.ProfileMatchThreshold,
+                Config.GlobalConfig.RecognitionDebugTopN);
+            p1 = result.BestName;
+            MaybeLogRecognitionDebug("profile_slot1", "Perfil slot 1", result, frame);
+        }
+
+        if (Config.Slot2Area.HasValue)
+        {
+            using var frame = Recognizer.CaptureFrame(Config.Slot2Area.Value);
+            var result = Recognizer.MatchProfileDetailedFrame(
+                frame,
+                Config.GlobalConfig.ProfileMatchThreshold,
+                Config.GlobalConfig.RecognitionDebugTopN);
+            p2 = result.BestName;
+            MaybeLogRecognitionDebug("profile_slot2", "Perfil slot 2", result, frame);
+        }
 
         // Anexos só entram na leitura de um slot cuja arma foi reconhecida, para não misturar
         // anexos novos com o perfil antigo.
@@ -401,19 +428,37 @@ public sealed class StabilizationEngine : IDisposable
         if (Config.OpticCandidateAreas.TryGetValue(slot, out var opticAreas) && opticAreas.Count > 0)
         {
             var images = Config.OpticItems.Select(o => o.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-            optic = Recognizer.MatchComponentWithScore(opticAreas, images).BestName;
+            var result = Recognizer.MatchComponentDetailed(
+                opticAreas,
+                images,
+                Config.GlobalConfig.OpticMatchThreshold,
+                Config.GlobalConfig.RecognitionDebugTopN);
+            optic = result.BestName;
+            MaybeLogRecognitionDebug($"optic_slot{slot}", $"Escopo slot {slot}", result, null);
         }
 
         if (Config.Comp1CandidateAreas.TryGetValue(slot, out var comp1Areas) && comp1Areas.Count > 0)
         {
             var images = Config.ComponentGroup1.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-            comp1 = Recognizer.MatchComponentWithScore(comp1Areas, images).BestName;
+            var result = Recognizer.MatchComponentDetailed(
+                comp1Areas,
+                images,
+                Config.GlobalConfig.ComponentMatchThreshold,
+                Config.GlobalConfig.RecognitionDebugTopN);
+            comp1 = result.BestName;
+            MaybeLogRecognitionDebug($"component1_slot{slot}", $"Componente 1 slot {slot}", result, null);
         }
 
         if (Config.Comp2CandidateAreas.TryGetValue(slot, out var comp2Areas) && comp2Areas.Count > 0)
         {
             var images = Config.ComponentGroup2.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-            comp2 = Recognizer.MatchComponentWithScore(comp2Areas, images).BestName;
+            var result = Recognizer.MatchComponentDetailed(
+                comp2Areas,
+                images,
+                Config.GlobalConfig.ComponentMatchThreshold,
+                Config.GlobalConfig.RecognitionDebugTopN);
+            comp2 = result.BestName;
+            MaybeLogRecognitionDebug($"component2_slot{slot}", $"Componente 2 slot {slot}", result, null);
         }
 
         return new SlotAttachments(optic, comp1, comp2);
@@ -428,7 +473,15 @@ public sealed class StabilizationEngine : IDisposable
         {
             try
             {
-                var detected = Recognizer.MatchStance(coords);
+                using var frame = Recognizer.CaptureFrame(coords);
+                var result = Recognizer.MatchStanceFrame(
+                    frame,
+                    Config.GlobalConfig.StanceMatchThreshold,
+                    Config.GlobalConfig.RecognitionDebugTopN);
+                MaybeLogRecognitionDebug("stance", "Postura", result, frame);
+                StanceType? detected = Enum.TryParse<StanceType>(result.BestName, out var parsed)
+                    ? parsed
+                    : null;
                 if (detected.HasValue && detected.Value != CurrentStance)
                 {
                     if (detected.Value == candidate)
@@ -451,6 +504,17 @@ public sealed class StabilizationEngine : IDisposable
 
             Thread.Sleep(200);
         }
+    }
+
+    private void MaybeLogRecognitionDebug(string key, string label, MatchDebugResult result, OpenCvSharp.Mat? frame)
+    {
+        if (!Diagnostics.ShouldEmit(key))
+            return;
+
+        string best = result.BestName ?? "nenhum";
+        string candidates = Diagnostics.FormatCandidates(result);
+        Log($"[RecognitionDebug] {label} -> best={best} score={result.BestScore:F3} top=[{candidates}]");
+        Diagnostics.SaveCrop(label, frame);
     }
 
     private void CommandDispatchLoop()

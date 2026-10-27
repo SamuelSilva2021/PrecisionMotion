@@ -16,17 +16,52 @@ public sealed class PatternMatcher : IDisposable
 
     private readonly string _resDirectory;
     private readonly Dictionary<string, Mat> _templates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Mat> _profileTemplates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Mat> _opticTemplates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<StanceType, Mat> _stanceTemplates = new();
     private readonly Dictionary<string, Mat> _allTemplates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly bool _normalizeRecognition;
 
     private Mat? _cachedFrame;
     private int _cacheX0;
     private int _cacheY0;
 
-    public PatternMatcher(string baseDirectory, string resolution)
+    public PatternMatcher(string baseDirectory, string resolution, bool normalizeRecognition = true)
     {
         _resDirectory = Path.Combine(baseDirectory, "Configs", resolution);
+        _normalizeRecognition = normalizeRecognition;
         LoadTemplates();
+    }
+
+    public static Mat PreprocessForMatch(Mat source, bool normalizeRecognition)
+    {
+        if (source.Empty())
+            return source.Clone();
+
+        Mat grayscale;
+        if (source.Channels() == 1)
+        {
+            grayscale = source.Clone();
+        }
+        else
+        {
+            grayscale = new Mat();
+            var colorCode = source.Channels() switch
+            {
+                3 => ColorConversionCodes.BGR2GRAY,
+                4 => ColorConversionCodes.BGRA2GRAY,
+                _ => ColorConversionCodes.BGR2GRAY
+            };
+            Cv2.CvtColor(source, grayscale, colorCode);
+        }
+
+        if (!normalizeRecognition)
+            return grayscale;
+
+        var normalized = new Mat();
+        Cv2.EqualizeHist(grayscale, normalized);
+        grayscale.Dispose();
+        return normalized;
     }
 
     private void LoadTemplates()
@@ -36,8 +71,10 @@ public sealed class PatternMatcher : IDisposable
         foreach (var file in Directory.GetFiles(_resDirectory, "*.png"))
         {
             string fname = Path.GetFileName(file);
-            var img = Cv2.ImRead(file, ImreadModes.Grayscale);
-            if (img.Empty()) continue;
+            using var loaded = Cv2.ImRead(file, ImreadModes.Grayscale);
+            if (loaded.Empty()) continue;
+
+            var img = PreprocessForMatch(loaded, _normalizeRecognition);
 
             _allTemplates[fname] = img;
 
@@ -45,6 +82,11 @@ public sealed class PatternMatcher : IDisposable
             {
                 string tag = fname.Substring(5, fname.Length - 9).ToUpperInvariant();
                 _templates[tag] = img;
+
+                if (OpticNames.Contains(tag))
+                    _opticTemplates[tag] = img;
+                else
+                    _profileTemplates[tag] = img;
             }
         }
 
@@ -91,78 +133,107 @@ public sealed class PatternMatcher : IDisposable
         return ScreenCaptureService.CaptureRegion(region);
     }
 
-    public (string? BestName, double BestScore) Match(Mat? screenCrop, double threshold, Dictionary<string, Mat> candidates)
+    public Mat? CaptureFrame(ScreenRegion region)
+    {
+        using var frame = Grab(region);
+        return frame?.Clone();
+    }
+
+    public MatchDebugResult MatchDetailed(Mat? screenCrop, double threshold, Dictionary<string, Mat> candidates, int topN = 3)
     {
         if (screenCrop == null || screenCrop.Empty())
-            return (null, 0.0);
+            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
 
-        string? bestName = null;
-        double bestScore = -1.0;
+        using var preparedFrame = PreprocessForMatch(screenCrop, _normalizeRecognition);
+        var ranked = new List<MatchCandidateScore>(candidates.Count);
 
         foreach (var (name, tmpl) in candidates)
         {
-            if (screenCrop.Height < tmpl.Height || screenCrop.Width < tmpl.Width)
+            if (preparedFrame.Height < tmpl.Height || preparedFrame.Width < tmpl.Width)
                 continue;
 
             using var result = new Mat();
-            Cv2.MatchTemplate(screenCrop, tmpl, result, TemplateMatchModes.CCoeffNormed);
+            Cv2.MatchTemplate(preparedFrame, tmpl, result, TemplateMatchModes.CCoeffNormed);
             Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
-
-            if (maxVal > bestScore && maxVal >= threshold)
-            {
-                bestScore = maxVal;
-                bestName = name;
-            }
+            ranked.Add(new MatchCandidateScore(name, maxVal));
         }
 
-        return (bestName, bestScore >= 0 ? bestScore : 0.0);
+        if (ranked.Count == 0)
+            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
+
+        ranked.Sort((a, b) => b.Score.CompareTo(a.Score));
+        var top = ranked.Take(Math.Max(1, topN)).ToArray();
+        var best = ranked[0];
+        return best.Score >= threshold
+            ? new MatchDebugResult(best.Name, best.Score, top)
+            : new MatchDebugResult(null, best.Score, top);
+    }
+
+    public (string? BestName, double BestScore) Match(Mat? screenCrop, double threshold, Dictionary<string, Mat> candidates)
+    {
+        var debug = MatchDetailed(screenCrop, threshold, candidates, 1);
+        return (debug.BestName, debug.BestScore);
     }
 
     public string? MatchProfile(ScreenRegion region, double threshold = 0.60)
     {
         using var frame = Grab(region);
-        var profileTemplates = _templates
-            .Where(kv => !OpticNames.Contains(kv.Key))
-            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
-
-        return Match(frame, threshold, profileTemplates).BestName;
+        return MatchProfileFrame(frame, threshold).BestName;
     }
+
+    public (string? BestName, double BestScore) MatchProfileFrame(Mat? screenCrop, double threshold = 0.60) =>
+        Match(screenCrop, threshold, _profileTemplates);
+
+    public MatchDebugResult MatchProfileDetailedFrame(Mat? screenCrop, double threshold = 0.60, int topN = 3) =>
+        MatchDetailed(screenCrop, threshold, _profileTemplates, topN);
 
     public string? MatchOptic(ScreenRegion region, double threshold = 0.55)
     {
         using var frame = ScreenCaptureService.CaptureRegion(region);
-        var opticTemplates = _templates
-            .Where(kv => OpticNames.Contains(kv.Key))
-            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
-
-        return Match(frame, threshold, opticTemplates).BestName;
+        return MatchOpticFrame(frame, threshold).BestName;
     }
+
+    public (string? BestName, double BestScore) MatchOpticFrame(Mat? screenCrop, double threshold = 0.55) =>
+        Match(screenCrop, threshold, _opticTemplates);
+
+    public MatchDebugResult MatchOpticDetailedFrame(Mat? screenCrop, double threshold = 0.55, int topN = 3) =>
+        MatchDetailed(screenCrop, threshold, _opticTemplates, topN);
 
     public StanceType? MatchStance(ScreenRegion region, double threshold = 0.55)
     {
         using var frame = ScreenCaptureService.CaptureRegion(region);
-        if (frame == null || frame.Empty()) return null;
+        var result = MatchStanceFrame(frame, threshold);
+        return Enum.TryParse<StanceType>(result.BestName, out var stance) ? stance : null;
+    }
 
-        StanceType? bestStance = null;
-        double bestVal = threshold;
+    public MatchDebugResult MatchStanceFrame(Mat? screenCrop, double threshold = 0.55, int topN = 3)
+    {
+        if (screenCrop == null || screenCrop.Empty())
+            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
+
+        using var preparedFrame = PreprocessForMatch(screenCrop, _normalizeRecognition);
+        var ranked = new List<MatchCandidateScore>(_stanceTemplates.Count);
 
         foreach (var (stance, tmpl) in _stanceTemplates)
         {
-            if (frame.Height < tmpl.Height || frame.Width < tmpl.Width)
+            if (preparedFrame.Height < tmpl.Height || preparedFrame.Width < tmpl.Width)
                 continue;
 
             using var result = new Mat();
-            Cv2.MatchTemplate(frame, tmpl, result, TemplateMatchModes.CCoeffNormed);
+            Cv2.MatchTemplate(preparedFrame, tmpl, result, TemplateMatchModes.CCoeffNormed);
             Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
-
-            if (maxVal > bestVal)
-            {
-                bestVal = maxVal;
-                bestStance = stance;
-            }
+            ranked.Add(new MatchCandidateScore(stance.ToString(), maxVal));
         }
 
-        return bestStance;
+        if (ranked.Count == 0)
+            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
+
+        ranked.Sort((a, b) => b.Score.CompareTo(a.Score));
+        var top = ranked.Take(Math.Max(1, topN)).ToArray();
+        var best = ranked[0];
+        return best.Score >= threshold
+            ? new MatchDebugResult(best.Name, best.Score, top)
+            : new MatchDebugResult(null, best.Score, top);
     }
 
     public (string? BestName, double BestScore) MatchComponentWithScore(
@@ -170,14 +241,24 @@ public sealed class PatternMatcher : IDisposable
         List<string> candidateImages,
         double threshold = DefaultIconThreshold)
     {
+        var debug = MatchComponentDetailed(areas, candidateImages, threshold, 1);
+        return (debug.BestName, debug.BestScore);
+    }
+
+    public MatchDebugResult MatchComponentDetailed(
+        List<ScreenRegion> areas,
+        List<string> candidateImages,
+        double threshold = DefaultIconThreshold,
+        int topN = 3)
+    {
         var candidates = candidateImages
             .Where(img => _allTemplates.ContainsKey(img))
             .ToDictionary(img => img, img => _allTemplates[img], StringComparer.OrdinalIgnoreCase);
 
-        if (candidates.Count == 0) return (null, 0.0);
+        if (candidates.Count == 0)
+            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
 
-        string? bestName = null;
-        double bestScore = threshold;
+        MatchDebugResult? best = null;
 
         foreach (var area in areas)
         {
@@ -190,25 +271,12 @@ public sealed class PatternMatcher : IDisposable
 
             using var frame = Grab(expanded);
             if (frame == null || frame.Empty()) continue;
-
-            foreach (var (name, tmpl) in candidates)
-            {
-                if (frame.Height < tmpl.Height || frame.Width < tmpl.Width)
-                    continue;
-
-                using var result = new Mat();
-                Cv2.MatchTemplate(frame, tmpl, result, TemplateMatchModes.CCoeffNormed);
-                Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
-
-                if (maxVal > bestScore)
-                {
-                    bestScore = maxVal;
-                    bestName = name;
-                }
-            }
+            var match = MatchDetailed(frame, threshold, candidates, topN);
+            if (best == null || match.BestScore > best.BestScore)
+                best = match;
         }
 
-        return (bestName, bestName != null ? bestScore : 0.0);
+        return best ?? new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
     }
 
     public double? CalculateCenterDarkness()

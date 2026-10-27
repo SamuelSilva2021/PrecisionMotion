@@ -8,6 +8,9 @@ using System.Windows.Media;
 using PrecisionMotion.Core.Configuration;
 using PrecisionMotion.Core.Models;
 using PrecisionMotion.Core.Stabilization;
+using PrecisionMotion.Core.Vision.Detection;
+using PrecisionMotion.Core.Vision.Pipeline;
+using PrecisionMotion.Core.Vision.Visualization;
 
 namespace PrecisionMotion.UI;
 
@@ -31,6 +34,12 @@ public partial class MainWindow : Window
     private StabilizationEngine? _engine;
     private string _currentProfile = "M416";
     private bool _suppressSliderEvents;
+
+    private float _visionConfidence = 0.40f;
+    private float _visionNms = 0.45f;
+    private CancellationTokenSource? _auditCts;
+    private string? _lastGeneratedVideoPath;
+    private string _modelPath = "";
 
     public MainWindow()
     {
@@ -81,21 +90,31 @@ public partial class MainWindow : Window
 
         BigSlider.Value = _config.GlobalConfig.MasterCalibration;
         BigSliderLabel.Text = $"{_config.GlobalConfig.MasterCalibration}%";
+
+        InitializeVisionControls();
     }
 
     private void OnTabChanged(object sender, RoutedEventArgs e)
     {
-        if (ViewMain == null || ViewWp == null) return;
+        if (ViewMain == null || ViewWp == null || ViewVision == null) return;
 
         if (TabMainBtn.IsChecked == true)
         {
             ViewMain.Visibility = Visibility.Visible;
             ViewWp.Visibility = Visibility.Collapsed;
+            ViewVision.Visibility = Visibility.Collapsed;
         }
         else if (TabWpBtn.IsChecked == true)
         {
             ViewMain.Visibility = Visibility.Collapsed;
             ViewWp.Visibility = Visibility.Visible;
+            ViewVision.Visibility = Visibility.Collapsed;
+        }
+        else if (TabVisionBtn.IsChecked == true)
+        {
+            ViewMain.Visibility = Visibility.Collapsed;
+            ViewWp.Visibility = Visibility.Collapsed;
+            ViewVision.Visibility = Visibility.Visible;
         }
     }
 
@@ -421,4 +440,248 @@ public partial class MainWindow : Window
             MessageBoxButton.OK,
             MessageBoxImage.Information);
     }
+
+    #region Visão & Telemetria Handlers
+
+    private void InitializeVisionControls()
+    {
+        // Localiza modelo pubg_trained.onnx
+        string basePath = AppDomain.CurrentDomain.BaseDirectory;
+        string[] candidatePaths = {
+            Path.Combine(basePath, "models", "pubg_trained.onnx"),
+            Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "..", "..", "models", "pubg_trained.onnx")),
+            Path.GetFullPath(Path.Combine(basePath, "..", "..", "..", "models", "pubg_trained.onnx")),
+            Path.GetFullPath("models/pubg_trained.onnx")
+        };
+
+        foreach (var p in candidatePaths)
+        {
+            if (File.Exists(p))
+            {
+                _modelPath = p;
+                break;
+            }
+        }
+
+        if (string.IsNullOrEmpty(_modelPath) && File.Exists("models/pubg_trained.onnx"))
+        {
+            _modelPath = Path.GetFullPath("models/pubg_trained.onnx");
+        }
+
+        if (File.Exists(_modelPath))
+        {
+            ModelStatusBadge.Text = "● ONNX Conectado";
+            ModelFileLabel.Text = Path.GetFileName(_modelPath);
+            LogVision($"[SISTEMA] Modelo neural carregado: {_modelPath}");
+        }
+        else
+        {
+            ModelStatusBadge.Text = "○ Modelo ausente";
+            ModelStatusBadge.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+            ModelFileLabel.Text = "pubg_trained.onnx não encontrado";
+            LogVision("[AVISO] Arquivo de modelo pubg_trained.onnx não foi encontrado na pasta models/.");
+        }
+
+        PopulateVideoList();
+    }
+
+    private void PopulateVideoList()
+    {
+        string defaultDir = @"C:\Users\samue\Videos\NVIDIAPLAYERUNKNOWN'S BATTLEGROUNDS";
+        VideoClipsCombo.Items.Clear();
+
+        if (Directory.Exists(defaultDir))
+        {
+            var files = Directory.GetFiles(defaultDir, "*.mp4")
+                .OrderByDescending(f => File.GetLastWriteTime(f))
+                .ToList();
+
+            foreach (var f in files)
+            {
+                VideoClipsCombo.Items.Add(f);
+            }
+
+            if (VideoClipsCombo.Items.Count > 0)
+            {
+                VideoClipsCombo.SelectedIndex = 0;
+                AuditProgressStatus.Text = $"{VideoClipsCombo.Items.Count} gravações encontradas.";
+                LogVision($"[SISTEMA] {VideoClipsCombo.Items.Count} clipes de combate carregados da pasta NVIDIA.");
+            }
+        }
+        else
+        {
+            AuditProgressStatus.Text = "Pasta padrão de vídeos não encontrada. Use 'Procurar Outro...'.";
+        }
+    }
+
+    private void OnVisionConfidenceChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (VisionConfidenceLabel == null) return;
+        _visionConfidence = (float)(e.NewValue / 100.0);
+        VisionConfidenceLabel.Text = $"{e.NewValue:F0}%";
+    }
+
+    private void OnVisionNmsChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (VisionNmsLabel == null) return;
+        _visionNms = (float)(e.NewValue / 100.0);
+        VisionNmsLabel.Text = $"{e.NewValue:F0}%";
+    }
+
+    private void OnBrowseVideoClicked(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Selecionar Gravação de Combate PUBG",
+            Filter = "Vídeos (*.mp4;*.avi;*.mkv)|*.mp4;*.avi;*.mkv|Todos os Arquivos (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            if (!VideoClipsCombo.Items.Contains(dialog.FileName))
+            {
+                VideoClipsCombo.Items.Insert(0, dialog.FileName);
+            }
+            VideoClipsCombo.SelectedItem = dialog.FileName;
+            AuditProgressStatus.Text = $"Selecionado: {Path.GetFileName(dialog.FileName)}";
+            LogVision($"[ARQUIVO] Vídeo selecionado: {dialog.FileName}");
+        }
+    }
+
+    private async void OnStartAuditClicked(object sender, RoutedEventArgs e)
+    {
+        string? videoPath = VideoClipsCombo.SelectedItem?.ToString();
+        if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
+        {
+            MessageBox.Show("Selecione um arquivo de vídeo válido para auditar.", "Vídeo Inválido", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_modelPath) || !File.Exists(_modelPath))
+        {
+            MessageBox.Show($"O modelo pubg_trained.onnx não foi encontrado em:\n{_modelPath}\n\nVerifique o arquivo na pasta models/", "Modelo ausente", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        StartAuditBtn.IsEnabled = false;
+        CancelAuditBtn.IsEnabled = true;
+        OpenOutputDirBtn.IsEnabled = false;
+        AuditProgressBar.Value = 0;
+        AuditProgressPercent.Text = "0%";
+
+        string outputDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "auditorias");
+        Directory.CreateDirectory(outputDir);
+        string outputFileName = $"audit_{DateTime.Now:yyyyMMdd_HHmmss}_{Path.GetFileNameWithoutExtension(videoPath)}.avi";
+        string outputVideoPath = Path.Combine(outputDir, outputFileName);
+        _lastGeneratedVideoPath = outputVideoPath;
+
+        _auditCts = new CancellationTokenSource();
+        LogVision($"==================================================");
+        LogVision($"[INICIANDO AUDITORIA] {Path.GetFileName(videoPath)}");
+        LogVision($"[CONFIG] Limiar Confiança: {_visionConfidence:P0} | NMS IoU: {_visionNms:P0}");
+        LogVision($"[DESTINO] {outputVideoPath}");
+        AuditProgressStatus.Text = "Inicializando rede neural ONNX...";
+
+        try
+        {
+            var detector = new OnnxTargetDetector(
+                _modelPath,
+                confidenceThreshold: _visionConfidence,
+                iouThreshold: _visionNms,
+                allowedClassIds: new[] { 0, 1 });
+
+            var config = new VisionPipelineConfig
+            {
+                MinimumConfidence = _visionConfidence,
+                UseRoi = false
+            };
+
+            var annotator = new VideoAnnotatorService(detector, config);
+
+            var progress = new Progress<VideoAnnotatorProgress>(p =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    AuditProgressBar.Value = p.ProgressPercentage * 100.0;
+                    AuditProgressPercent.Text = $"{p.ProgressPercentage * 100.0:F0}%";
+                    AuditProgressStatus.Text = $"Processando: {p.ProcessedFrames}/{p.TotalFrames} frames | {p.CurrentFps:F1} FPS";
+
+                    MetricLatencyLabel.Text = $"{p.AverageLatencyMs:F1} ms";
+                    MetricFpsLabel.Text = $"{p.CurrentFps:F1} FPS";
+                    MetricTargetsLabel.Text = $"{p.TotalDetections}";
+                    MetricHeadRatioLabel.Text = $"{p.BodyDetections} / {p.HeadDetections}";
+                });
+            });
+
+            var result = await Task.Run(() => annotator.RenderAnnotatedVideoDetailedAsync(
+                videoPath,
+                outputVideoPath,
+                maxFrames: 450, // Processa até ~15s de clipe
+                progress: progress,
+                cancellationToken: _auditCts.Token));
+
+            LogVision($"[CONCLUÍDO] {result.ProcessedFrames} quadros renderizados em {result.ElapsedTime.TotalSeconds:F1} segundos.");
+            LogVision($"[TELEMETRIA] FPS Médio: {result.AverageFps:F1} | Latência Média: {result.AverageLatencyMs:F1} ms");
+            LogVision($"[DETECÇÕES] Total: {result.TotalDetections} alvos (Corpo: {result.BodyDetections}, Cabeça: {result.HeadDetections})");
+            LogVision($"[ARQUIVO SALVO] {result.OutputPath}");
+
+            AuditProgressStatus.Text = $"Auditoria concluída com sucesso! ({result.ProcessedFrames} quadros anotados)";
+            AuditProgressBar.Value = 100;
+            AuditProgressPercent.Text = "100%";
+            OpenOutputDirBtn.IsEnabled = true;
+
+            if (_config.GlobalConfig.SoundsEnabled)
+            {
+                System.Media.SystemSounds.Asterisk.Play();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            LogVision("[CANCELADO] Auditoria interrompida pelo usuário.");
+            AuditProgressStatus.Text = "Processamento cancelado.";
+        }
+        catch (Exception ex)
+        {
+            LogVision($"[FALHA] Erro durante o processamento: {ex.Message}");
+            AuditProgressStatus.Text = "Erro na execução da auditoria.";
+            MessageBox.Show($"Erro durante a auditoria do vídeo:\n{ex.Message}", "Erro de Visão", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            StartAuditBtn.IsEnabled = true;
+            CancelAuditBtn.IsEnabled = false;
+            _auditCts?.Dispose();
+            _auditCts = null;
+        }
+    }
+
+    private void OnCancelAuditClicked(object sender, RoutedEventArgs e)
+    {
+        _auditCts?.Cancel();
+    }
+
+    private void OnOpenOutputDirClicked(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(_lastGeneratedVideoPath) && File.Exists(_lastGeneratedVideoPath))
+        {
+            System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{_lastGeneratedVideoPath}\"");
+        }
+        else
+        {
+            string outputDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "auditorias");
+            if (Directory.Exists(outputDir))
+            {
+                System.Diagnostics.Process.Start("explorer.exe", outputDir);
+            }
+        }
+    }
+
+    private void LogVision(string message)
+    {
+        string timestamp = DateTime.Now.ToString("HH:mm:ss");
+        AuditLogBox.AppendText($"[{timestamp}] {message}\r\n");
+        AuditLogBox.ScrollToEnd();
+    }
+
+    #endregion
 }

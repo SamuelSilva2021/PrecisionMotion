@@ -129,7 +129,7 @@ public class GameplayVideoBenchmarkTests
         totalProcessed.Should().BeGreaterThan(0);
     }
 
-    [Fact]
+    [Fact(Skip = "Extração manual sob demanda para não sobrescrever o dataset de treino existente")]
     public async Task ExtractDataset_FromUserHighlightVideos()
     {
         string solutionRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));

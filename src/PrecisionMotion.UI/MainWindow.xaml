@@ -1,4 +1,4 @@
-﻿<Window x:Class="PrecisionMotion.UI.MainWindow"
+<Window x:Class="PrecisionMotion.UI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Precision Motion - Studio de Calibração"
@@ -45,6 +45,11 @@
                     <RadioButton x:Name="TabWpBtn" Style="{StaticResource NavButton}" Checked="OnTabChanged">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🎯  Calibração de Perfis" FontSize="15"/>
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="TabVisionBtn" Style="{StaticResource NavButton}" Checked="OnTabChanged">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="👁️  Visão &amp; Telemetria" FontSize="15"/>
                         </StackPanel>
                     </RadioButton>
                 </StackPanel>
@@ -322,6 +327,179 @@
                     </ScrollViewer>
                 </Border>
             </Grid>
+
+            <!-- View 3: Computer Vision & Telemetry -->
+            <ScrollViewer x:Name="ViewVision" FontSize="15" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                <StackPanel MaxWidth="880" HorizontalAlignment="Left">
+                    <!-- Title Bar -->
+                    <TextBlock Text="Visão Computacional &amp; Telemetria" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Auditoria visual com rede neural ONNX para análise espacial, detecção de alvos e telemetria." FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+
+                    <!-- Neural Model Status Card -->
+                    <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" Margin="0,0,0,16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,12">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Modelo Neural de Detecção" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                    <Border Background="#064E3B" CornerRadius="4" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="ModelStatusBadge" Text="● ONNX Conectado" FontSize="12" FontWeight="SemiBold" Foreground="#34D399"/>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock x:Name="ModelFileLabel" Text="models/pubg_trained.onnx" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <!-- Model specs row -->
+                            <Grid Margin="0,0,0,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Border Grid.Column="0" Background="#181B24" CornerRadius="6" Padding="12,10" Margin="0,0,6,0">
+                                    <StackPanel>
+                                        <TextBlock Text="ARQUITETURA" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="YOLO26s Custom" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Grid.Column="1" Background="#181B24" CornerRadius="6" Padding="12,10" Margin="6,0,6,0">
+                                    <StackPanel>
+                                        <TextBlock Text="CLASSES" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="Corpo (0) | Cabeça (1)" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Grid.Column="2" Background="#181B24" CornerRadius="6" Padding="12,10" Margin="6,0,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="PRECISÃO / mAP50" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="91.7% / 83.2%" FontSize="15" FontWeight="SemiBold" Foreground="#60A5FA" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <!-- Sliders for Threshold and NMS -->
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <Grid Margin="0,0,0,4">
+                                        <TextBlock Text="Confiança Mínima (Threshold)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        <TextBlock x:Name="VisionConfidenceLabel" Text="40%" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                    </Grid>
+                                    <Slider x:Name="VisionConfidenceSlider" Minimum="10" Maximum="90" Value="40" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="OnVisionConfidenceChanged"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <Grid Margin="0,0,0,4">
+                                        <TextBlock Text="Supressão Não-Máxima (NMS IoU)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        <TextBlock x:Name="VisionNmsLabel" Text="45%" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                                    </Grid>
+                                    <Slider x:Name="VisionNmsSlider" Minimum="10" Maximum="90" Value="45" TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="OnVisionNmsChanged"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Real-Time / Audit Performance Telemetry Grid -->
+                    <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" Margin="0,0,0,16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Painel de Métricas &amp; Telemetria" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,12"/>
+
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Card 1: Latency -->
+                                <Border Grid.Column="0" Background="#181B24" CornerRadius="8" Padding="12,10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="⚡ LATÊNCIA" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock x:Name="MetricLatencyLabel" Text="0.0 ms" FontSize="18" FontWeight="Bold" Foreground="#38BDF8" Margin="0,4,0,0"/>
+                                        <TextBlock Text="inferência / frame" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Card 2: FPS -->
+                                <Border Grid.Column="2" Background="#181B24" CornerRadius="8" Padding="12,10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="⏱️ VELOCIDADE" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock x:Name="MetricFpsLabel" Text="0.0 FPS" FontSize="18" FontWeight="Bold" Foreground="#34D399" Margin="0,4,0,0"/>
+                                        <TextBlock Text="taxa de processamento" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Card 3: Total Detections -->
+                                <Border Grid.Column="4" Background="#181B24" CornerRadius="8" Padding="12,10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="🎯 ALVOS TOTAIS" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock x:Name="MetricTargetsLabel" Text="0" FontSize="18" FontWeight="Bold" Foreground="#FBBF24" Margin="0,4,0,0"/>
+                                        <TextBlock Text="detecções registradas" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Card 4: Head vs Body -->
+                                <Border Grid.Column="6" Background="#181B24" CornerRadius="8" Padding="12,10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="💀 CORPO / CABEÇA" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock x:Name="MetricHeadRatioLabel" Text="0 / 0" FontSize="18" FontWeight="Bold" Foreground="#F472B6" Margin="0,4,0,0"/>
+                                        <TextBlock Text="body vs head" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Offline Video Auditor Section -->
+                    <Border Background="{StaticResource CardBrush}" CornerRadius="8" Padding="18" Margin="0,0,0,16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Auditoria Visual de Highlight Clips" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Text="Selecione um vídeo gravado do PUBG para o modelo detectar alvos, calcular posições de cabeça e gerar o vídeo anotado com telemetria." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,14"/>
+
+                            <!-- Video Picker Row -->
+                            <Grid Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="10"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <ComboBox x:Name="VideoClipsCombo" Grid.Column="0" Height="38" VerticalContentAlignment="Center" Background="#181B24" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="{StaticResource BorderBrush}"/>
+                                <Button Grid.Column="2" Content="Procurar Outro..." Height="38" Padding="14,0" Style="{StaticResource PrimaryButton}" Background="#2D3346" Click="OnBrowseVideoClicked"/>
+                            </Grid>
+
+                            <!-- Execution Controls -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                                <Button x:Name="StartAuditBtn" Content="▶  Iniciar Auditoria Visual" Style="{StaticResource PrimaryButton}" Padding="20,10" FontSize="15" Click="OnStartAuditClicked"/>
+                                <Button x:Name="CancelAuditBtn" Content="⏹  Cancelar" Style="{StaticResource PrimaryButton}" Background="#7F1D1D" Padding="16,10" FontSize="15" Margin="10,0,0,0" IsEnabled="False" Click="OnCancelAuditClicked"/>
+                                <Button x:Name="OpenOutputDirBtn" Content="📁 Abrir Vídeo Gerado" Style="{StaticResource PrimaryButton}" Background="#1E293B" Padding="16,10" FontSize="15" Margin="10,0,0,0" IsEnabled="False" Click="OnOpenOutputDirClicked"/>
+                            </StackPanel>
+
+                            <!-- Progress Bar & Status Text -->
+                            <Grid Margin="0,0,0,8">
+                                <TextBlock x:Name="AuditProgressStatus" Text="Aguardando seleção do vídeo..." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                <TextBlock x:Name="AuditProgressPercent" Text="0%" FontSize="13" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
+                            </Grid>
+                            <ProgressBar x:Name="AuditProgressBar" Height="8" Minimum="0" Maximum="100" Value="0" Background="#181B24" Foreground="{StaticResource AccentBrush}" BorderThickness="0" Margin="0,0,0,14"/>
+
+                            <!-- Execution Log Console -->
+                            <TextBlock Text="Registro de Auditoria &amp; Logs:" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
+                            <TextBox x:Name="AuditLogBox" Height="140" Background="#0F1117" Foreground="#10B981" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" 
+                                     FontFamily="Consolas" FontSize="12" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Padding="8"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
     </Grid>
 </Window>

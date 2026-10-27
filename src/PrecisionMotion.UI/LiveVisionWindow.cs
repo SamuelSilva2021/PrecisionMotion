@@ -22,6 +22,7 @@ public sealed class LiveVisionWindow : Window
     private readonly Canvas _annotations;
     private CancellationTokenSource? _cts;
     private Task? _worker;
+    private bool _collectTelemetry;
 
     public LiveVisionWindow(string modelPath, float threshold, float nms, bool useCuda = false)
     {
@@ -43,6 +44,9 @@ public sealed class LiveVisionWindow : Window
         var stop = new Button { Content = "Parar", Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(0, 0, 12, 0) };
         stop.Click += (_, _) => _cts?.Cancel();
         header.Children.Add(stop);
+        var collect = new Button { Content = "Coletar 60s (YOLO11n)", Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(0, 0, 12, 0), IsEnabled = System.IO.Path.GetFileName(_modelPath).Equals("yolo11n.onnx", StringComparison.OrdinalIgnoreCase) };
+        collect.Click += (_, _) => { _collectTelemetry = true; collect.IsEnabled = false; };
+        header.Children.Add(collect);
 
         _status = new TextBlock { Text = "Iniciando captura...", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center };
         header.Children.Add(_status);
@@ -114,6 +118,9 @@ public sealed class LiveVisionWindow : Window
             byte[] buffer = ArrayPool<byte>.Shared.Rent(byteCount);
             var watch = Stopwatch.StartNew();
             int frames = 0;
+            DiagnosticTelemetryCollector? telemetry = null;
+            Stopwatch? telemetryWatch = null;
+            int telemetryFrame = 0;
 
             try
             {
@@ -126,9 +133,32 @@ public sealed class LiveVisionWindow : Window
                 while (!token.IsCancellationRequested)
                 {
                     long started = Stopwatch.GetTimestamp();
+                    if (_collectTelemetry && telemetry is null)
+                    {
+                        telemetry = new DiagnosticTelemetryCollector(System.IO.Path.GetFileName(_modelPath), provider);
+                        telemetryWatch = Stopwatch.StartNew();
+                    }
                     if (!source.TryGetNextFrame(buffer, out _, out _, token)) break;
+                    double captureMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    long inferenceStarted = Stopwatch.GetTimestamp();
                     var targets = await detector.DetectAsync(buffer.AsMemory(0, byteCount), width, height, token);
+                    double inferenceMs = Stopwatch.GetElapsedTime(inferenceStarted).TotalMilliseconds;
                     double latency = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    if (telemetry is not null && telemetryWatch is not null)
+                    {
+                        telemetry.Add(++telemetryFrame, telemetryWatch.Elapsed.TotalSeconds, captureMs, inferenceMs, latency,
+                            targets.Count, targets.Count > 0 ? targets.Max(t => t.Confidence) : 0);
+                        if (telemetryWatch.Elapsed.TotalSeconds >= telemetry.DurationSeconds)
+                        {
+                            var saved = telemetry.Save();
+                            telemetry = null;
+                            telemetryWatch = null;
+                            _collectTelemetry = false;
+                            await Dispatcher.InvokeAsync(() => MessageBox.Show(this,
+                                "Coleta concluída. CSV: " + saved.Csv + Environment.NewLine + "Resumo: " + saved.Summary,
+                                "Telemetria", MessageBoxButton.OK, MessageBoxImage.Information));
+                        }
+                    }
                     frames++;
                     double fps = frames / Math.Max(0.001, watch.Elapsed.TotalSeconds);
 
@@ -169,6 +199,11 @@ public sealed class LiveVisionWindow : Window
             }
             finally
             {
+                if (telemetry is not null && telemetry.Count > 0)
+                {
+                    var saved = telemetry.Save();
+                    await Dispatcher.InvokeAsync(() => _status.Text = "Coleta parcial salva: " + saved.Summary);
+                }
                 ArrayPool<byte>.Shared.Return(buffer);
             }
             }

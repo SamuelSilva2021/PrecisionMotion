@@ -16,3 +16,6 @@ TestResults/
 .claude/
 /dataset_pubg
 /runs/detect/predict
+
+# credenciais locais
+data/Configs/geral/saveduser.cfg

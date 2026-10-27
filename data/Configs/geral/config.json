@@ -1,0 +1,193 @@
+{
+  "configs": [
+    {
+      "res3440x1440": false,
+      "res2560x1440": false,
+      "res2560x1080": false,
+      "res1920x1080": true,
+      "res1728x1080": false,
+      "res1440x1080": false,
+      "res1600x900": false,
+      "res1366x768": false,
+      "coord3440x1440": [
+        [
+          2204,
+          2853
+        ],
+        [
+          117,
+          747
+        ]
+      ],
+      "scoord3440x1440": [
+        [
+          1388,
+          1320
+        ],
+        [
+          29,
+          45
+        ]
+      ],
+      "coord2560x1440": [
+        [
+          1766,
+          2411
+        ],
+        [
+          118,
+          746
+        ]
+      ],
+      "scoord2560x1440": [
+        [
+          948,
+          1320
+        ],
+        [
+          29,
+          45
+        ]
+      ],
+      "coord2560x1080": [
+        [
+          1642,
+          2132
+        ],
+        [
+          86,
+          559
+        ]
+      ],
+      "scoord2560x1080": [
+        [
+          1031,
+          990
+        ],
+        [
+          23,
+          34
+        ]
+      ],
+      "coord1920x1080": [
+        [
+          1321,
+          1812
+        ],
+        [
+          86,
+          561
+        ]
+      ],
+      "scoord1920x1080": [
+        [
+          710,
+          990
+        ],
+        [
+          23,
+          34
+        ]
+      ],
+      "coord1728x1080": [
+        [
+          1227,
+          1718
+        ],
+        [
+          86,
+          559
+        ]
+      ],
+      "scoord1728x1080": [
+        [
+          615,
+          990
+        ],
+        [
+          22,
+          34
+        ]
+      ],
+      "coord1440x1080": [
+        [
+          848,
+          1338
+        ],
+        [
+          86,
+          559
+        ]
+      ],
+      "scoord1440x1080": [
+        [
+          471,
+          990
+        ],
+        [
+          22,
+          34
+        ]
+      ],
+      "coord1600x900": [
+        [
+          1100,
+          1513
+        ],
+        [
+          70,
+          467
+        ]
+      ],
+      "scoord1600x900": [
+        [
+          592,
+          825
+        ],
+        [
+          19,
+          29
+        ]
+      ],
+      "coord1366x768": [
+        [
+          937,
+          1291
+        ],
+        [
+          59,
+          399
+        ]
+      ],
+      "scoord1366x768": [
+        [
+          506,
+          704
+        ],
+        [
+          16,
+          25
+        ]
+      ],
+      "teclaresetarmas": "0x74",
+      "teclarecarmas": "0x52",
+      "teclareabrirmenu": "0x75",
+      "teclaarmaslot1": "0x31",
+      "teclaarmaslot2": "0x32",
+      "teclainventario": "0x09",
+      "teclaagachar": "0x43",
+      "teclapular": "0x20",
+      "tecladeitar": "0x5A",
+      "statusmenu": 1,
+      "dmrs": true,
+      "invertslots": false,
+      "tpp": false,
+      "fpp": true,
+      "calibragem": 140,
+      "sons": true,
+      "modo_mira": "segurar",
+      "slot2": true,
+      "limiar_mira_visual": 0.75
+    }
+  ]
+}

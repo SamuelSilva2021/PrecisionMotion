@@ -178,7 +178,7 @@ public sealed class VisionPipeline : IAsyncDisposable, IDisposable
 
                     if (selectedSpatial.HasValue)
                     {
-                        double timestamp = totalWatch.Elapsed.TotalSeconds;
+                        double timestamp = (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
                         smoothedHead = _smoother.Smooth(selectedSpatial.Value.EstimatedHead, timestamp);
                     }
                 }
@@ -217,12 +217,16 @@ public sealed class VisionPipeline : IAsyncDisposable, IDisposable
         {
             try
             {
+                long frameStart = Stopwatch.GetTimestamp();
                 await ProcessSingleFrameAsync(cancellationToken).ConfigureAwait(false);
 
                 if (_config.TargetFps > 0)
                 {
-                    int delayMs = Math.Max(1, 1000 / _config.TargetFps);
-                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                    double remainingMs = (1000.0 / _config.TargetFps) - Stopwatch.GetElapsedTime(frameStart).TotalMilliseconds;
+                    if (remainingMs > 0)
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(remainingMs), cancellationToken).ConfigureAwait(false);
+                    }
                 }
             }
             catch (OperationCanceledException)

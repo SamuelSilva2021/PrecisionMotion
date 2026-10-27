@@ -103,6 +103,7 @@ public sealed class VideoAnnotatorService
             throw new InvalidOperationException($"Não foi possível inicializar VideoWriter para: {outputVideoPath}");
         }
 
+        var tracker = new OfflineDetectionTracker();
         var selector = new ClosestToCrosshairSelector();
         var smoother = new ExponentialMovingAverageSmoother(_config.SmoothingAlpha, _config.SmoothingTimeoutSeconds);
         var calculator = new CoordinateCalculator(width, height, _config.HeadRatio);
@@ -243,6 +244,16 @@ public sealed class VideoAnnotatorService
                     _config.ReferencePoint,
                     metrics,
                     roiRect);
+
+                var tracks = tracker.Update(detectedList);
+                foreach (var track in tracks)
+                {
+                    var box = track.Detection.Box;
+                    int x = Math.Clamp((int)box.X, 0, width - 1);
+                    int y = Math.Clamp((int)box.Y - 5, 18, height - 1);
+                    Cv2.PutText(annotated, $"ID {track.Id} | {track.Detection.Confidence:P0} | frames {track.ObservedFrames}",
+                        new Point(x, y), HersheyFonts.HersheySimplex, 0.5, new Scalar(255, 255, 0), 2);
+                }
 
                 writer.Write(annotated);
                 processedFrames++;

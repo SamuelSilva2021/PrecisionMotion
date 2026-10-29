@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using PrecisionMotion.Core.Vision;
 
 namespace PrecisionMotion.Core.Interop;
 
@@ -52,6 +53,9 @@ public static class NativeMethods
 
     [DllImport("gdi32.dll")]
     public static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+    [DllImport("gdi32.dll")]
+    internal static extern IntPtr CreateDIBSection(IntPtr hdc, ref ScreenCaptureService.BITMAPINFO pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
 
     [DllImport("gdi32.dll")]
     public static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int w, int h, IntPtr hdcSrc, int xSrc, int ySrc, int rop);

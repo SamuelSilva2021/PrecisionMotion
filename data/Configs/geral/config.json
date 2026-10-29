@@ -186,6 +186,8 @@
       "calibragem": 140,
       "sons": true,
       "modo_mira": "segurar",
+      "visao_ativa": true,
+      "leitura_postura": false,
       "slot2": true,
       "limiar_mira_visual": 0.75,
       "limiar_match_perfil": 0.6,

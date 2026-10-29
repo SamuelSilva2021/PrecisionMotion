@@ -31,6 +31,12 @@ public sealed class PatternMatcher : IDisposable
     private int _cacheX0;
     private int _cacheY0;
 
+    static PatternMatcher()
+    {
+        // O pool do OpenCV (um worker por núcleo) disputaria CPU com o jogo para ganhar microssegundos em crops pequenos.
+        Cv2.SetNumThreads(1);
+    }
+
     public PatternMatcher(string baseDirectory, string resolution, bool normalizeRecognition = true)
     {
         _resDirectory = Path.Combine(baseDirectory, "Configs", resolution);

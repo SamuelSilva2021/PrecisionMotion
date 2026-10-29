@@ -25,7 +25,8 @@ public sealed record InventoryRecognitionResult(
 public sealed record StanceRecognitionResult(
     StanceType? Stable,
     bool Changed,
-    MatchDebugResult Raw);
+    MatchDebugResult Raw,
+    bool Pending = false);
 
 /// <summary>Última observação de um tipo de reconhecimento (para diagnóstico na UI).</summary>
 public sealed record RecognitionObservation(
@@ -44,7 +45,9 @@ public sealed record RecognitionSnapshot(
     bool NormalizeRecognition,
     string DiagnosticsDirectory,
     int SavedCrops,
-    DateTime CapturedAt)
+    DateTime CapturedAt,
+    long CaptureCount = 0,
+    double MeanCaptureMs = 0)
 {
     public static RecognitionSnapshot Empty { get; } =
         new(Array.Empty<RecognitionObservation>(), true, "", 0, DateTime.MinValue);

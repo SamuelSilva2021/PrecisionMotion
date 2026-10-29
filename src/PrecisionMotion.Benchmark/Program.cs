@@ -1,4 +1,5 @@
 using PrecisionMotion.Core.Configuration;
+using OpenCvSharp;
 using PrecisionMotion.Core.Vision;
 
 // Uso:
@@ -37,6 +38,48 @@ switch (command)
         var report = CalibrationRunner.Run(config, selfTest: !Flag("--no-selftest"));
         Console.WriteLine(report.ToText());
         return report.IsValid ? 0 : 1;
+    }
+
+    case "perf":
+    {
+        var g = config.GlobalConfig;
+        using var matcher = new PatternMatcher(config.BaseDirectory, g.ActiveResolution, g.NormalizeRecognition);
+        Console.WriteLine($"Resolução {g.ActiveResolution} | perfis={matcher.ProfileTemplates.Count} escopos={matcher.OpticTemplates.Count} postura={matcher.StanceTemplates.Count}");
+        Console.WriteLine($"Áreas: escopo={config.OpticCandidateAreas.Sum(k => k.Value.Count)} comp1={config.Comp1CandidateAreas.Sum(k => k.Value.Count)} comp2={config.Comp2CandidateAreas.Sum(k => k.Value.Count)}");
+        Console.WriteLine($"OpenCV threads: {Cv2.GetNumThreads()}");
+
+        static void Measure(string label, int iterations, Action action)
+        {
+            action(); // aquecimento
+            long alloc0 = GC.GetAllocatedBytesForCurrentThread();
+            int gc0 = GC.CollectionCount(0);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < iterations; i++) action();
+            sw.Stop();
+            Console.WriteLine($"{label,-34} {sw.Elapsed.TotalMilliseconds / iterations,8:F2} ms/leitura | {(GC.GetAllocatedBytesForCurrentThread() - alloc0) / iterations / 1024.0,8:F0} KB/leitura | GC0={GC.CollectionCount(0) - gc0}");
+        }
+
+        // Captura real da tela (GDI) — custo sem o jogo; com o jogo em tela cheia pode ser maior.
+        var stance = g.PostureCoords;
+        Measure("captura GDI postura", 100, () => { using var f = PrecisionMotion.Core.Vision.ScreenCaptureService.CaptureRegion(stance); });
+        var big = new PrecisionMotion.Core.Models.ScreenRegion(0, 0, 900, 700);
+        Measure("captura GDI 900x700 (inventário)", 50, () => { using var f = PrecisionMotion.Core.Vision.ScreenCaptureService.CaptureRegion(big); });
+
+        // Casamento puro (sem GDI): tela sintética com ruído.
+        using var screen = new Mat(2160, 3840, MatType.CV_8UC1);
+        Cv2.Randu(screen, Scalar.All(0), Scalar.All(255));
+        matcher.FrameProvider = r =>
+        {
+            var rect = new Rect(Math.Clamp(r.X, 0, 3000), Math.Clamp(r.Y, 0, 1500), Math.Max(1, r.Width), Math.Max(1, r.Height));
+            rect = new Rect(rect.X, rect.Y, Math.Min(rect.Width, screen.Width - rect.X), Math.Min(rect.Height, screen.Height - rect.Y));
+            return new Mat(screen, rect).Clone();
+        };
+        var diagnostics = new RecognitionDiagnostics(config.BaseDirectory, g);
+        using var service = new RecognitionService(config, matcher, diagnostics, new RecognitionTelemetry("perf_tmp", false));
+        service.BeginInventorySession();
+        Measure("PollStance (casamento)", 100, () => service.PollStance());
+        Measure("PollInventory (casamento+cache)", 20, () => service.PollInventory());
+        return 0;
     }
 
     case "benchmark":

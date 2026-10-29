@@ -72,6 +72,8 @@ public class GlobalConfigData
     public double ExitThresholdMargin { get; set; } = 0.05;
     public double AmbiguityMargin { get; set; } = 0.02;
     public int AttachmentCadence { get; set; } = 3;
+    public bool VisionEnabled { get; set; } = true;
+    public bool StanceReadingEnabled { get; set; } = true;
     public bool TelemetryEnabled { get; set; } = true;
     public string TelemetryDirectory { get; set; } = "benchmark_output\\telemetry";
     public bool SoundsEnabled { get; set; } = true;

@@ -15,8 +15,11 @@ public sealed class StabilizationEngine : IDisposable
     private const double PadraoAgachado = -0.15;
     private const double GainMin = 10.0;
     private const double GainMax = 2000.0;
-    private const int InventoryPollMs = 50;
-    private const int StancePollMs = 200;
+    private const int InventoryPollMs = 100;
+    private const int InventorySettledPollMs = 250;
+    private const double TabCloseDebounceSeconds = 0.4;
+    private const int StanceIdleMs = 400;
+    private const int StancePendingMs = 150;
     private const double InventoryMaxSeconds = 120.0;
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(2);
 
@@ -53,6 +56,7 @@ public sealed class StabilizationEngine : IDisposable
 
     private int _tabPressCount;
     private bool _initialReadCompleted;
+    private volatile bool _isFiring;
     private double _subPixelAccumulator;
 
     // Protege o estado de slots/perfis compartilhado entre os loops de inventário, comandos e persistência.
@@ -97,14 +101,28 @@ public sealed class StabilizationEngine : IDisposable
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
 
-        _tasks = new[]
+        var loops = new List<Task>
         {
-            RunLoop(StabilizationLoop, token, ThreadPriority.Highest),
+            RunLoop(StabilizationLoop, token, ThreadPriority.AboveNormal),
             RunLoop(CommandDispatchLoop, token),
-            RunLoop(KeyMonitorLoop, token),
-            RunLoop(InventorySessionLoop, token),
-            RunLoop(StanceLoop, token)
+            RunLoop(KeyMonitorLoop, token)
         };
+
+        // visao_ativa=false: nenhuma captura de tela; só compensação e comandos (isola problemas com o jogo).
+        if (Config.GlobalConfig.VisionEnabled)
+        {
+            loops.Add(RunLoop(InventorySessionLoop, token, ThreadPriority.BelowNormal));
+            if (Config.GlobalConfig.StanceReadingEnabled)
+                loops.Add(RunLoop(StanceLoop, token, ThreadPriority.BelowNormal));
+            else
+                Log("[Engine] Leitura de postura desligada (leitura_postura=false): postura fixa em pé.");
+        }
+        else
+        {
+            Log("[Engine] Visão desligada (visao_ativa=false): sem leitura de inventário/postura nem captura de tela.");
+        }
+
+        _tasks = loops.ToArray();
 
         Log($"[Engine] Inicializado com resolução {Config.GlobalConfig.ActiveResolution} | Modo mira: {AimMode}");
     }
@@ -124,6 +142,10 @@ public sealed class StabilizationEngine : IDisposable
             catch (Exception ex)
             {
                 Log($"[Engine] Loop {loop.Method.Name} encerrado por erro: {ex.Message}");
+            }
+            finally
+            {
+                ScreenCaptureService.ReleaseThreadResources();
             }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
@@ -240,13 +262,14 @@ public sealed class StabilizationEngine : IDisposable
                     if ((now - lastVisualCheckTicks) / (double)Stopwatch.Frequency >= 0.3)
                     {
                         lastVisualCheckTicks = now;
-                        double? darkness = Recognizer.CalculateCenterDarkness();
-                        if (darkness >= Config.GlobalConfig.VisualDetectionThreshold)
+                        double? darkness = Config.GlobalConfig.VisionEnabled ? Recognizer.CalculateCenterDarkness() : null;
+                        if (Config.GlobalConfig.VisionEnabled && darkness >= Config.GlobalConfig.VisualDetectionThreshold)
                             IsAimEngaged = true;
                     }
                 }
             }
             wasRightDown = rightDown;
+            _isFiring = leftDown && IsAimEngaged;
 
             if (leftDown && IsAimEngaged)
             {
@@ -273,7 +296,7 @@ public sealed class StabilizationEngine : IDisposable
             {
                 isActivelyCompensating = false;
                 _subPixelAccumulator = 0.0;
-                Sleep(token, 5);
+                Sleep(token, 10);
             }
         }
     }
@@ -289,7 +312,7 @@ public sealed class StabilizationEngine : IDisposable
                 Interlocked.Increment(ref _tabPressCount);
             }
             wasPressed = isDown;
-            Sleep(token, 2);
+            Sleep(token, 8);
         }
     }
 
@@ -302,7 +325,7 @@ public sealed class StabilizationEngine : IDisposable
         {
             if (Volatile.Read(ref _tabPressCount) == lastSeenTab)
             {
-                Sleep(token, 2);
+                Sleep(token, 10);
                 continue;
             }
 
@@ -315,6 +338,7 @@ public sealed class StabilizationEngine : IDisposable
     private void InspectInventory(CancellationToken token, double waitOpen = 2.0, double waitClose = 0.5)
     {
         var stopwatch = Stopwatch.StartNew();
+        int sessionTab = Volatile.Read(ref _tabPressCount);
         InventoryRecognitionResult? applied = null;
         bool inventorySeen = false;
         double lastVisibleAt = 0.0;
@@ -326,6 +350,12 @@ public sealed class StabilizationEngine : IDisposable
         while (!token.IsCancellationRequested && stopwatch.Elapsed.TotalSeconds < InventoryMaxSeconds)
         {
             double elapsed = stopwatch.Elapsed.TotalSeconds;
+
+            // No jogo o TAB abre e o TAB seguinte fecha o inventário: o 2º TAB encerra a sessão sem
+            // gastar mais capturas. O intervalo inicial ignora toques duplicados do próprio TAB de abertura.
+            if (elapsed >= TabCloseDebounceSeconds && Volatile.Read(ref _tabPressCount) != sessionTab)
+                break;
+
             var reading = Recognition.PollInventory();
 
             if (!reading.Visible)
@@ -346,7 +376,8 @@ public sealed class StabilizationEngine : IDisposable
                 }
             }
 
-            Sleep(token, InventoryPollMs);
+            // Depois de aplicado, só vigia trocas de anexo/arma: leitura mais espaçada (menos capturas).
+            Sleep(token, applied != null ? InventorySettledPollMs : InventoryPollMs);
         }
     }
 
@@ -397,8 +428,18 @@ public sealed class StabilizationEngine : IDisposable
 
     private void StanceLoop(CancellationToken token)
     {
+        int delayMs = StanceIdleMs;
+
         while (!token.IsCancellationRequested)
         {
+            // Cada captura GDI custa ~1 quadro de compositor: durante a rajada a postura quase não muda,
+            // então a leitura espera o tiro acabar em vez de disputar o jogo no pior momento.
+            if (_isFiring)
+            {
+                Sleep(token, StancePendingMs);
+                continue;
+            }
+
             try
             {
                 var result = Recognition.PollStance();
@@ -407,13 +448,17 @@ public sealed class StabilizationEngine : IDisposable
                     CurrentStance = result.Stable.Value;
                     Log($"[Stance] Atualizado: {CurrentStance}");
                 }
+
+                // Estável: leitura espaçada. Candidato novo aguardando confirmação: acelera só até confirmar.
+                delayMs = result.Pending ? StancePendingMs : StanceIdleMs;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log($"[Stance] Falha na leitura: {ex.Message}");
+                delayMs = StanceIdleMs;
             }
 
-            Sleep(token, StancePollMs);
+            Sleep(token, delayMs);
         }
     }
 

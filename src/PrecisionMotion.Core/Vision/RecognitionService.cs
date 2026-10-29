@@ -130,7 +130,7 @@ public sealed class RecognitionService : IRecognitionService
         Publish("stance", "Postura", raw, g.StanceMatchThreshold, region, _stance.Current, frame);
 
         StanceType? stable = Enum.TryParse<StanceType>(_stance.Current, out var parsed) ? parsed : null;
-        return new StanceRecognitionResult(stable, outcome.Changed, raw);
+        return new StanceRecognitionResult(stable, outcome.Changed, raw, outcome.State == HysteresisState.Pending);
     }
 
     public RecognitionSnapshot GetSnapshot() => new(
@@ -138,7 +138,9 @@ public sealed class RecognitionService : IRecognitionService
         _matcher.NormalizeRecognition,
         _diagnostics.OutputDirectory,
         _telemetry.FailureCropsSaved,
-        DateTime.Now);
+        DateTime.Now,
+        ScreenCaptureService.CaptureCount,
+        ScreenCaptureService.MeanCaptureMs);
 
     public void FlushTelemetry() => _telemetry.Flush();
 

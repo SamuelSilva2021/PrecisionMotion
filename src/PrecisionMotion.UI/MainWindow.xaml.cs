@@ -413,6 +413,7 @@ public partial class MainWindow : Window
         var snapshot = _engine.Recognition.GetSnapshot();
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"Normalização: {(snapshot.NormalizeRecognition ? "ligada" : "desligada")} | Crops de falha salvos: {snapshot.SavedCrops}");
+        sb.AppendLine($"Capturas de tela: {snapshot.CaptureCount} | média {snapshot.MeanCaptureMs:F1} ms");
         if (!string.IsNullOrEmpty(snapshot.DiagnosticsDirectory))
             sb.AppendLine($"Diretório de diagnóstico: {snapshot.DiagnosticsDirectory}");
 

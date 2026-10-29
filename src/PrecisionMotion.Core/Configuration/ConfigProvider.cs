@@ -186,6 +186,12 @@ public class ConfigProvider
                 if (cfg.TryGetProperty("cadencia_anexos", out var cadProp))
                     GlobalConfig.AttachmentCadence = ClampPositiveInt("cadencia_anexos", cadProp.GetInt32(), GlobalConfig.AttachmentCadence, 1, 100);
 
+                if (cfg.TryGetProperty("leitura_postura", out var stanceReadProp))
+                    GlobalConfig.StanceReadingEnabled = stanceReadProp.GetBoolean();
+
+                if (cfg.TryGetProperty("visao_ativa", out var visionProp))
+                    GlobalConfig.VisionEnabled = visionProp.GetBoolean();
+
                 if (cfg.TryGetProperty("telemetria", out var telProp))
                     GlobalConfig.TelemetryEnabled = telProp.GetBoolean();
 
@@ -487,6 +493,8 @@ public class ConfigProvider
                 cfgObj["histerese_margem_saida"] = GlobalConfig.ExitThresholdMargin;
                 cfgObj["histerese_margem_ambiguidade"] = GlobalConfig.AmbiguityMargin;
                 cfgObj["cadencia_anexos"] = GlobalConfig.AttachmentCadence;
+                cfgObj["visao_ativa"] = GlobalConfig.VisionEnabled;
+                cfgObj["leitura_postura"] = GlobalConfig.StanceReadingEnabled;
                 cfgObj["telemetria"] = GlobalConfig.TelemetryEnabled;
                 cfgObj["telemetria_diretorio"] = GlobalConfig.TelemetryDirectory;
                 cfgObj["sons"] = GlobalConfig.SoundsEnabled;

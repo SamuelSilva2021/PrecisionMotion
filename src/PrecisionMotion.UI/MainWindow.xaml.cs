@@ -31,6 +31,10 @@ public partial class MainWindow : Window
     private StabilizationEngine? _engine;
     private string _currentProfile = "M416";
     private bool _suppressSliderEvents;
+    private System.Windows.Threading.DispatcherTimer? _diagnosticsTimer;
+#if DEBUG
+    private DebugConsoleWindow? _debugConsole;
+#endif
 
     public MainWindow()
     {
@@ -342,6 +346,14 @@ public partial class MainWindow : Window
             _engine = null;
         }
 
+#if DEBUG
+        if (_debugConsole is not { IsLoaded: true })
+        {
+            _debugConsole = new DebugConsoleWindow(() => _engine == null ? "Motor inativo." : BuildDiagnosticsText());
+            _debugConsole.Show();
+        }
+#endif
+
         _engine = new StabilizationEngine(_config)
         {
             OnRestoreUIRequested = () =>
@@ -353,6 +365,9 @@ public partial class MainWindow : Window
                     Activate();
                 });
             },
+#if DEBUG
+            OnLogMessage = line => _debugConsole?.Write(line),
+#endif
             OnShutdownRequested = () =>
             {
                 Dispatcher.Invoke(() =>
@@ -364,9 +379,58 @@ public partial class MainWindow : Window
         };
 
         _engine.Start();
+        StartDiagnosticsTimer();
 
         StatusDot.Fill = new SolidColorBrush(Color.FromRgb(16, 185, 129)); // Green
         StatusLabel.Text = "Motor: Ativo";
+    }
+
+    private void StartDiagnosticsTimer()
+    {
+        if (_diagnosticsTimer == null)
+        {
+            _diagnosticsTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            _diagnosticsTimer.Tick += (_, _) => RefreshDiagnostics();
+        }
+
+        _diagnosticsTimer.Start();
+    }
+
+    private void RefreshDiagnostics()
+    {
+        // Janela oculta (motor em segundo plano): não gasta CPU formatando texto que ninguém vê.
+        if (_engine == null || !IsVisible || ViewMain.Visibility != Visibility.Visible)
+            return;
+
+        DiagnosticsText.Text = BuildDiagnosticsText();
+    }
+
+    private string BuildDiagnosticsText()
+    {
+        if (_engine == null)
+            return "Motor inativo.";
+
+        var snapshot = _engine.Recognition.GetSnapshot();
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Normalização: {(snapshot.NormalizeRecognition ? "ligada" : "desligada")} | Crops de falha salvos: {snapshot.SavedCrops}");
+        if (!string.IsNullOrEmpty(snapshot.DiagnosticsDirectory))
+            sb.AppendLine($"Diretório de diagnóstico: {snapshot.DiagnosticsDirectory}");
+
+        foreach (var o in snapshot.Observations)
+        {
+            string region = o.Region is { } r ? $"({r.X},{r.Y} {r.Width}x{r.Height})" : "-";
+            string top = string.Join(", ", o.TopCandidates.Take(3).Select(c => $"{c.Name}:{c.Score:F2}"));
+            string state = o.RawScore >= o.Threshold ? "ok" : "abaixo";
+            sb.AppendLine();
+            sb.AppendLine($"{o.Label}: melhor={o.RawBest ?? "-"} {o.RawScore:F3} [{state}] limiar={o.Threshold:F2} estável={(string.IsNullOrEmpty(o.StableValue) ? "-" : o.StableValue)}");
+            sb.AppendLine($"  top3: {top}");
+            sb.AppendLine($"  região: {region}");
+        }
+
+        if (snapshot.Observations.Count == 0)
+            sb.AppendLine("\nAguardando primeira leitura...");
+
+        return sb.ToString();
     }
 
     private void SaveUiState()

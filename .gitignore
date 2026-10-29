@@ -19,4 +19,6 @@ TestResults/
 
 # credenciais locais
 data/Configs/geral/saveduser.cfg
-/benchmark_output/offline
+
+# saídas geradas de benchmark/telemetria
+/benchmark_output/

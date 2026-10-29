@@ -18,10 +18,15 @@ public sealed class PatternMatcher : IDisposable
     private readonly Dictionary<string, Mat> _templates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Mat> _profileTemplates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Mat> _opticTemplates = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<StanceType, Mat> _stanceTemplates = new();
+    private readonly Dictionary<string, Mat> _stanceTemplates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Mat> _allTemplates = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _normalizeRecognition;
 
+    // Cada thread de reconhecimento (inventário, postura, benchmark) reaproveita o próprio buffer de resultado
+    // do MatchTemplate em vez de alocar um Mat por template por leitura.
+    private readonly ThreadLocal<Mat> _resultBuffer = new(() => new Mat(), trackAllValues: true);
+
+    private readonly object _cacheLock = new();
     private Mat? _cachedFrame;
     private int _cacheX0;
     private int _cacheY0;
@@ -33,27 +38,38 @@ public sealed class PatternMatcher : IDisposable
         LoadTemplates();
     }
 
+    /// <summary>Origem dos frames (padrão: captura de tela). Substituível para benchmarks e testes offline.</summary>
+    public Func<ScreenRegion, Mat?> FrameProvider { get; set; } = ScreenCaptureService.CaptureRegion;
+
+    public bool NormalizeRecognition => _normalizeRecognition;
+    public IReadOnlyDictionary<string, Mat> ProfileTemplates => _profileTemplates;
+    public IReadOnlyDictionary<string, Mat> OpticTemplates => _opticTemplates;
+    public IReadOnlyDictionary<string, Mat> StanceTemplates => _stanceTemplates;
+    public IReadOnlyDictionary<string, Mat> AllTemplates => _allTemplates;
+
     public static Mat PreprocessForMatch(Mat source, bool normalizeRecognition)
     {
         if (source.Empty())
             return source.Clone();
 
-        Mat grayscale;
         if (source.Channels() == 1)
         {
-            grayscale = source.Clone();
+            if (!normalizeRecognition)
+                return source.Clone();
+
+            var equalized = new Mat();
+            Cv2.EqualizeHist(source, equalized);
+            return equalized;
         }
-        else
+
+        var grayscale = new Mat();
+        var colorCode = source.Channels() switch
         {
-            grayscale = new Mat();
-            var colorCode = source.Channels() switch
-            {
-                3 => ColorConversionCodes.BGR2GRAY,
-                4 => ColorConversionCodes.BGRA2GRAY,
-                _ => ColorConversionCodes.BGR2GRAY
-            };
-            Cv2.CvtColor(source, grayscale, colorCode);
-        }
+            3 => ColorConversionCodes.BGR2GRAY,
+            4 => ColorConversionCodes.BGRA2GRAY,
+            _ => ColorConversionCodes.BGR2GRAY
+        };
+        Cv2.CvtColor(source, grayscale, colorCode);
 
         if (!normalizeRecognition)
             return grayscale;
@@ -91,82 +107,118 @@ public sealed class PatternMatcher : IDisposable
         }
 
         if (_allTemplates.TryGetValue("empe.png", out var empe))
-            _stanceTemplates[StanceType.Standard] = empe;
+            _stanceTemplates[nameof(StanceType.Standard)] = empe;
 
         if (_allTemplates.TryGetValue("agachado.png", out var agachado))
-            _stanceTemplates[StanceType.LowProfile] = agachado;
+            _stanceTemplates[nameof(StanceType.LowProfile)] = agachado;
 
         if (_allTemplates.TryGetValue("deitado.png", out var deitado))
-            _stanceTemplates[StanceType.Prone] = deitado;
+            _stanceTemplates[nameof(StanceType.Prone)] = deitado;
     }
 
     public void StartCache(ScreenRegion boundingRegion)
     {
-        ClearCache();
-        _cachedFrame = ScreenCaptureService.CaptureRegion(boundingRegion);
-        if (_cachedFrame != null)
+        var frame = FrameProvider(boundingRegion);
+        lock (_cacheLock)
         {
-            _cacheX0 = boundingRegion.X;
-            _cacheY0 = boundingRegion.Y;
+            _cachedFrame?.Dispose();
+            _cachedFrame = frame;
+            if (frame != null)
+            {
+                _cacheX0 = boundingRegion.X;
+                _cacheY0 = boundingRegion.Y;
+            }
         }
     }
 
     public void ClearCache()
     {
-        _cachedFrame?.Dispose();
-        _cachedFrame = null;
+        lock (_cacheLock)
+        {
+            _cachedFrame?.Dispose();
+            _cachedFrame = null;
+        }
     }
 
+    /// <summary>
+    /// Devolve um Mat que o chamador possui. Se a região está dentro do frame em cache a cópia sai dele
+    /// (sob lock, pois outra thread pode limpar o cache); caso contrário captura direto da tela.
+    /// </summary>
     private Mat? Grab(ScreenRegion region)
     {
-        if (_cachedFrame != null)
+        lock (_cacheLock)
         {
-            int fx = region.X - _cacheX0;
-            int fy = region.Y - _cacheY0;
-            if (fx >= 0 && fy >= 0 && fx + region.Width <= _cachedFrame.Width && fy + region.Height <= _cachedFrame.Height)
+            if (_cachedFrame != null)
             {
-                var rect = new Rect(fx, fy, region.Width, region.Height);
-                return new Mat(_cachedFrame, rect);
+                int fx = region.X - _cacheX0;
+                int fy = region.Y - _cacheY0;
+                if (fx >= 0 && fy >= 0 && fx + region.Width <= _cachedFrame.Width && fy + region.Height <= _cachedFrame.Height)
+                {
+                    using var view = new Mat(_cachedFrame, new Rect(fx, fy, region.Width, region.Height));
+                    return view.Clone();
+                }
             }
         }
 
-        return ScreenCaptureService.CaptureRegion(region);
+        return FrameProvider(region);
     }
 
-    public Mat? CaptureFrame(ScreenRegion region)
+    public Mat? CaptureFrame(ScreenRegion region) => Grab(region);
+
+    /// <summary>
+    /// Pontua cada candidato contra o frame já pré-processado. Candidatos maiores que o frame são
+    /// ignorados (e contados em <paramref name="skipped"/>) porque o MatchTemplate não consegue avaliá-los.
+    /// </summary>
+    private List<MatchCandidateScore> Rank(
+        Mat preparedFrame,
+        IEnumerable<KeyValuePair<string, Mat>> candidates,
+        out int skipped)
     {
-        using var frame = Grab(region);
-        return frame?.Clone();
+        var ranked = new List<MatchCandidateScore>();
+        var buffer = _resultBuffer.Value!;
+        skipped = 0;
+
+        foreach (var (name, tmpl) in candidates)
+        {
+            if (preparedFrame.Height < tmpl.Height || preparedFrame.Width < tmpl.Width)
+            {
+                skipped++;
+                continue;
+            }
+
+            Cv2.MatchTemplate(preparedFrame, tmpl, buffer, TemplateMatchModes.CCoeffNormed);
+            Cv2.MinMaxLoc(buffer, out _, out double maxVal, out _, out _);
+            // CCoeffNormed devolve NaN em regiões/templates sem variância (cor constante).
+            ranked.Add(new MatchCandidateScore(name, double.IsNaN(maxVal) ? 0.0 : maxVal));
+        }
+
+        ranked.Sort((a, b) => b.Score.CompareTo(a.Score));
+        return ranked;
     }
 
-    public MatchDebugResult MatchDetailed(Mat? screenCrop, double threshold, Dictionary<string, Mat> candidates, int topN = 3)
+    private static MatchDebugResult BuildResult(List<MatchCandidateScore> ranked, int skipped, double threshold, int topN)
+    {
+        if (ranked.Count == 0)
+            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>()) { SkippedCandidates = skipped };
+
+        var top = ranked.Take(Math.Max(1, topN)).ToArray();
+        var best = ranked[0];
+        return new MatchDebugResult(best.Score >= threshold ? best.Name : null, best.Score, top)
+        {
+            SkippedCandidates = skipped,
+            Threshold = threshold,
+            Margin = ranked.Count > 1 ? best.Score - ranked[1].Score : best.Score
+        };
+    }
+
+    public MatchDebugResult MatchDetailed(Mat? screenCrop, double threshold, IEnumerable<KeyValuePair<string, Mat>> candidates, int topN = 3)
     {
         if (screenCrop == null || screenCrop.Empty())
             return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
 
         using var preparedFrame = PreprocessForMatch(screenCrop, _normalizeRecognition);
-        var ranked = new List<MatchCandidateScore>(candidates.Count);
-
-        foreach (var (name, tmpl) in candidates)
-        {
-            if (preparedFrame.Height < tmpl.Height || preparedFrame.Width < tmpl.Width)
-                continue;
-
-            using var result = new Mat();
-            Cv2.MatchTemplate(preparedFrame, tmpl, result, TemplateMatchModes.CCoeffNormed);
-            Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
-            ranked.Add(new MatchCandidateScore(name, maxVal));
-        }
-
-        if (ranked.Count == 0)
-            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
-
-        ranked.Sort((a, b) => b.Score.CompareTo(a.Score));
-        var top = ranked.Take(Math.Max(1, topN)).ToArray();
-        var best = ranked[0];
-        return best.Score >= threshold
-            ? new MatchDebugResult(best.Name, best.Score, top)
-            : new MatchDebugResult(null, best.Score, top);
+        var ranked = Rank(preparedFrame, candidates, out int skipped);
+        return BuildResult(ranked, skipped, threshold, topN);
     }
 
     public (string? BestName, double BestScore) Match(Mat? screenCrop, double threshold, Dictionary<string, Mat> candidates)
@@ -189,7 +241,7 @@ public sealed class PatternMatcher : IDisposable
 
     public string? MatchOptic(ScreenRegion region, double threshold = 0.55)
     {
-        using var frame = ScreenCaptureService.CaptureRegion(region);
+        using var frame = FrameProvider(region);
         return MatchOpticFrame(frame, threshold).BestName;
     }
 
@@ -201,40 +253,13 @@ public sealed class PatternMatcher : IDisposable
 
     public StanceType? MatchStance(ScreenRegion region, double threshold = 0.55)
     {
-        using var frame = ScreenCaptureService.CaptureRegion(region);
+        using var frame = FrameProvider(region);
         var result = MatchStanceFrame(frame, threshold);
         return Enum.TryParse<StanceType>(result.BestName, out var stance) ? stance : null;
     }
 
-    public MatchDebugResult MatchStanceFrame(Mat? screenCrop, double threshold = 0.55, int topN = 3)
-    {
-        if (screenCrop == null || screenCrop.Empty())
-            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
-
-        using var preparedFrame = PreprocessForMatch(screenCrop, _normalizeRecognition);
-        var ranked = new List<MatchCandidateScore>(_stanceTemplates.Count);
-
-        foreach (var (stance, tmpl) in _stanceTemplates)
-        {
-            if (preparedFrame.Height < tmpl.Height || preparedFrame.Width < tmpl.Width)
-                continue;
-
-            using var result = new Mat();
-            Cv2.MatchTemplate(preparedFrame, tmpl, result, TemplateMatchModes.CCoeffNormed);
-            Cv2.MinMaxLoc(result, out _, out double maxVal, out _, out _);
-            ranked.Add(new MatchCandidateScore(stance.ToString(), maxVal));
-        }
-
-        if (ranked.Count == 0)
-            return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
-
-        ranked.Sort((a, b) => b.Score.CompareTo(a.Score));
-        var top = ranked.Take(Math.Max(1, topN)).ToArray();
-        var best = ranked[0];
-        return best.Score >= threshold
-            ? new MatchDebugResult(best.Name, best.Score, top)
-            : new MatchDebugResult(null, best.Score, top);
-    }
+    public MatchDebugResult MatchStanceFrame(Mat? screenCrop, double threshold = 0.55, int topN = 3) =>
+        MatchDetailed(screenCrop, threshold, _stanceTemplates, topN);
 
     public (string? BestName, double BestScore) MatchComponentWithScore(
         List<ScreenRegion> areas,
@@ -245,16 +270,19 @@ public sealed class PatternMatcher : IDisposable
         return (debug.BestName, debug.BestScore);
     }
 
+    public Dictionary<string, Mat> ResolveComponentCandidates(IEnumerable<string> candidateImages) =>
+        candidateImages
+            .Where(img => _allTemplates.ContainsKey(img))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(img => img, img => _allTemplates[img], StringComparer.OrdinalIgnoreCase);
+
     public MatchDebugResult MatchComponentDetailed(
         List<ScreenRegion> areas,
         List<string> candidateImages,
         double threshold = DefaultIconThreshold,
         int topN = 3)
     {
-        var candidates = candidateImages
-            .Where(img => _allTemplates.ContainsKey(img))
-            .ToDictionary(img => img, img => _allTemplates[img], StringComparer.OrdinalIgnoreCase);
-
+        var candidates = ResolveComponentCandidates(candidateImages);
         if (candidates.Count == 0)
             return new MatchDebugResult(null, 0.0, Array.Empty<MatchCandidateScore>());
 
@@ -310,6 +338,12 @@ public sealed class PatternMatcher : IDisposable
             mat.Dispose();
         _allTemplates.Clear();
         _templates.Clear();
+        _profileTemplates.Clear();
+        _opticTemplates.Clear();
         _stanceTemplates.Clear();
+
+        foreach (var buffer in _resultBuffer.Values)
+            buffer.Dispose();
+        _resultBuffer.Dispose();
     }
 }

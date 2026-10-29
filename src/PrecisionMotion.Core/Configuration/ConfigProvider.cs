@@ -34,18 +34,38 @@ public class ConfigProvider
         ReloadAll();
     }
 
-    private static double ClampThreshold(double value, double fallback)
+    public List<ConfigIssue> LoadIssues { get; } = new();
+
+    /// <summary>Força a resolução ativa (ferramentas offline) sem alterar o config.json.</summary>
+    public string? ResolutionOverride { get; set; }
+
+    private void AddIssue(ConfigIssueSeverity severity, string code, string message) =>
+        LoadIssues.Add(new ConfigIssue(severity, code, message));
+
+    private double ClampThreshold(string key, double value, double fallback)
     {
         if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            AddIssue(ConfigIssueSeverity.Error, "threshold_invalid", $"{key}: valor não numérico; usando {fallback:F2}.");
             return fallback;
+        }
 
-        return Math.Clamp(value, 0.0, 1.0);
+        if (value < 0.0 || value > 1.0)
+        {
+            AddIssue(ConfigIssueSeverity.Warning, "threshold_out_of_range", $"{key}={value:F3} fora de [0,1]; ajustado.");
+            return Math.Clamp(value, 0.0, 1.0);
+        }
+
+        return value;
     }
 
-    private static int ClampPositiveInt(int value, int fallback, int min, int max)
+    private int ClampPositiveInt(string key, int value, int fallback, int min, int max)
     {
         if (value < min || value > max)
+        {
+            AddIssue(ConfigIssueSeverity.Warning, "value_out_of_range", $"{key}={value} fora de [{min},{max}]; usando {fallback}.");
             return fallback;
+        }
 
         return value;
     }
@@ -90,7 +110,10 @@ public class ConfigProvider
 
     public void ReloadAll()
     {
+        LoadIssues.Clear();
         LoadGlobalConfig();
+        if (!string.IsNullOrEmpty(ResolutionOverride))
+            GlobalConfig.ActiveResolution = ResolutionOverride;
         LoadCalibrationParameters();
         LoadStanceCoordinates();
         LoadResolutionComponents();
@@ -100,7 +123,11 @@ public class ConfigProvider
     {
         GlobalConfig = new GlobalConfigData();
         string cfgPath = Path.Combine(BaseDirectory, "Configs", "geral", "config.json");
-        if (!File.Exists(cfgPath)) return;
+        if (!File.Exists(cfgPath))
+        {
+            AddIssue(ConfigIssueSeverity.Error, "file_missing", $"config.json ausente: {cfgPath}");
+            return;
+        }
 
         try
         {
@@ -133,19 +160,37 @@ public class ConfigProvider
                     GlobalConfig.AimMode = modoProp.GetString()?.ToLowerInvariant() ?? "segurar";
 
                 if (cfg.TryGetProperty("limiar_mira_visual", out var limiarProp))
-                    GlobalConfig.VisualDetectionThreshold = ClampThreshold(limiarProp.GetDouble(), GlobalConfig.VisualDetectionThreshold);
+                    GlobalConfig.VisualDetectionThreshold = ClampThreshold("limiar_mira_visual", limiarProp.GetDouble(), GlobalConfig.VisualDetectionThreshold);
 
                 if (cfg.TryGetProperty("limiar_match_perfil", out var limiarPerfilProp))
-                    GlobalConfig.ProfileMatchThreshold = ClampThreshold(limiarPerfilProp.GetDouble(), GlobalConfig.ProfileMatchThreshold);
+                    GlobalConfig.ProfileMatchThreshold = ClampThreshold("limiar_match_perfil", limiarPerfilProp.GetDouble(), GlobalConfig.ProfileMatchThreshold);
 
                 if (cfg.TryGetProperty("limiar_match_escopo", out var limiarEscopoProp))
-                    GlobalConfig.OpticMatchThreshold = ClampThreshold(limiarEscopoProp.GetDouble(), GlobalConfig.OpticMatchThreshold);
+                    GlobalConfig.OpticMatchThreshold = ClampThreshold("limiar_match_escopo", limiarEscopoProp.GetDouble(), GlobalConfig.OpticMatchThreshold);
 
                 if (cfg.TryGetProperty("limiar_match_postura", out var limiarPosturaProp))
-                    GlobalConfig.StanceMatchThreshold = ClampThreshold(limiarPosturaProp.GetDouble(), GlobalConfig.StanceMatchThreshold);
+                    GlobalConfig.StanceMatchThreshold = ClampThreshold("limiar_match_postura", limiarPosturaProp.GetDouble(), GlobalConfig.StanceMatchThreshold);
 
                 if (cfg.TryGetProperty("limiar_match_componente", out var limiarComponenteProp))
-                    GlobalConfig.ComponentMatchThreshold = ClampThreshold(limiarComponenteProp.GetDouble(), GlobalConfig.ComponentMatchThreshold);
+                    GlobalConfig.ComponentMatchThreshold = ClampThreshold("limiar_match_componente", limiarComponenteProp.GetDouble(), GlobalConfig.ComponentMatchThreshold);
+
+                if (cfg.TryGetProperty("histerese_confirmacoes", out var confProp))
+                    GlobalConfig.StableConfirmations = ClampPositiveInt("histerese_confirmacoes", confProp.GetInt32(), GlobalConfig.StableConfirmations, 1, 20);
+
+                if (cfg.TryGetProperty("histerese_margem_saida", out var exitProp))
+                    GlobalConfig.ExitThresholdMargin = ClampThreshold("histerese_margem_saida", exitProp.GetDouble(), GlobalConfig.ExitThresholdMargin);
+
+                if (cfg.TryGetProperty("histerese_margem_ambiguidade", out var ambProp))
+                    GlobalConfig.AmbiguityMargin = ClampThreshold("histerese_margem_ambiguidade", ambProp.GetDouble(), GlobalConfig.AmbiguityMargin);
+
+                if (cfg.TryGetProperty("cadencia_anexos", out var cadProp))
+                    GlobalConfig.AttachmentCadence = ClampPositiveInt("cadencia_anexos", cadProp.GetInt32(), GlobalConfig.AttachmentCadence, 1, 100);
+
+                if (cfg.TryGetProperty("telemetria", out var telProp))
+                    GlobalConfig.TelemetryEnabled = telProp.GetBoolean();
+
+                if (cfg.TryGetProperty("telemetria_diretorio", out var telDirProp))
+                    GlobalConfig.TelemetryDirectory = telDirProp.GetString() ?? GlobalConfig.TelemetryDirectory;
 
                 if (cfg.TryGetProperty("normalizar_reconhecimento", out var normalizarProp))
                     GlobalConfig.NormalizeRecognition = normalizarProp.GetBoolean();
@@ -157,10 +202,10 @@ public class ConfigProvider
                     GlobalConfig.RecognitionDebugSaveCrops = saveCropsProp.GetBoolean();
 
                 if (cfg.TryGetProperty("debug_top_n", out var topNProp))
-                    GlobalConfig.RecognitionDebugTopN = ClampPositiveInt(topNProp.GetInt32(), GlobalConfig.RecognitionDebugTopN, 1, 10);
+                    GlobalConfig.RecognitionDebugTopN = ClampPositiveInt("debug_top_n", topNProp.GetInt32(), GlobalConfig.RecognitionDebugTopN, 1, 10);
 
                 if (cfg.TryGetProperty("debug_intervalo_ms", out var debugIntervalProp))
-                    GlobalConfig.RecognitionDebugIntervalMs = ClampPositiveInt(debugIntervalProp.GetInt32(), GlobalConfig.RecognitionDebugIntervalMs, 100, 60000);
+                    GlobalConfig.RecognitionDebugIntervalMs = ClampPositiveInt("debug_intervalo_ms", debugIntervalProp.GetInt32(), GlobalConfig.RecognitionDebugIntervalMs, 100, 60000);
 
                 if (cfg.TryGetProperty("debug_diretorio", out var debugDirProp))
                     GlobalConfig.RecognitionDebugDirectory = debugDirProp.GetString() ?? GlobalConfig.RecognitionDebugDirectory;
@@ -181,7 +226,10 @@ public class ConfigProvider
                     GlobalConfig.InvertSlots = invProp.GetBoolean();
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or IOException or KeyNotFoundException)
+        {
+            AddIssue(ConfigIssueSeverity.Error, "parse_error", $"config.json inválido: {ex.Message}");
+        }
     }
 
     private void LoadCalibrationParameters()
@@ -192,7 +240,11 @@ public class ConfigProvider
         foreach (var fname in ParamFiles)
         {
             string path = Path.Combine(BaseDirectory, "Configs", "calibragem", fname);
-            if (!File.Exists(path)) continue;
+            if (!File.Exists(path))
+            {
+                AddIssue(ConfigIssueSeverity.Warning, "file_missing", $"{fname} ausente em calibragem.");
+                continue;
+            }
 
             try
             {
@@ -237,7 +289,10 @@ public class ConfigProvider
                     Profiles[name.ToUpperInvariant()] = item;
                 }
             }
-            catch { }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException or IOException)
+            {
+                AddIssue(ConfigIssueSeverity.Error, "parse_error", $"{fname} inválido: {ex.Message}");
+            }
         }
 
         Slot1Area = seenAreas.Count >= 1 ? seenAreas[0] : null;
@@ -247,7 +302,11 @@ public class ConfigProvider
     private void LoadStanceCoordinates()
     {
         string cfgPath = Path.Combine(BaseDirectory, "Configs", GlobalConfig.ActiveResolution, "coord.cfg");
-        if (!File.Exists(cfgPath)) return;
+        if (!File.Exists(cfgPath))
+        {
+            AddIssue(ConfigIssueSeverity.Warning, "file_missing", $"coord.cfg ausente para {GlobalConfig.ActiveResolution}.");
+            return;
+        }
 
         try
         {
@@ -271,7 +330,10 @@ public class ConfigProvider
 
             GlobalConfig.PostureCoords = new ScreenRegion(x, y, w, h);
         }
-        catch { }
+        catch (IOException ex)
+        {
+            AddIssue(ConfigIssueSeverity.Error, "parse_error", $"coord.cfg ilegível: {ex.Message}");
+        }
     }
 
     private void LoadResolutionComponents()
@@ -288,7 +350,11 @@ public class ConfigProvider
         Comp2CandidateAreas[2].Clear();
 
         string path = Path.Combine(BaseDirectory, "Configs", GlobalConfig.ActiveResolution, "parameter1.json");
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+        {
+            AddIssue(ConfigIssueSeverity.Error, "file_missing", $"parameter1.json ausente para {GlobalConfig.ActiveResolution}.");
+            return;
+        }
 
         try
         {
@@ -317,7 +383,10 @@ public class ConfigProvider
             ParseComponentList(root, "atachs1", ComponentGroup1, Comp1CandidateAreas);
             ParseComponentList(root, "atachs2", ComponentGroup2, Comp2CandidateAreas);
         }
-        catch { }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException or IOException)
+        {
+            AddIssue(ConfigIssueSeverity.Error, "parse_error", $"parameter1.json inválido: {ex.Message}");
+        }
     }
 
     private static void ParseComponentList(
@@ -414,6 +483,12 @@ public class ConfigProvider
                 cfgObj["debug_top_n"] = GlobalConfig.RecognitionDebugTopN;
                 cfgObj["debug_intervalo_ms"] = GlobalConfig.RecognitionDebugIntervalMs;
                 cfgObj["debug_diretorio"] = GlobalConfig.RecognitionDebugDirectory;
+                cfgObj["histerese_confirmacoes"] = GlobalConfig.StableConfirmations;
+                cfgObj["histerese_margem_saida"] = GlobalConfig.ExitThresholdMargin;
+                cfgObj["histerese_margem_ambiguidade"] = GlobalConfig.AmbiguityMargin;
+                cfgObj["cadencia_anexos"] = GlobalConfig.AttachmentCadence;
+                cfgObj["telemetria"] = GlobalConfig.TelemetryEnabled;
+                cfgObj["telemetria_diretorio"] = GlobalConfig.TelemetryDirectory;
                 cfgObj["sons"] = GlobalConfig.SoundsEnabled;
                 cfgObj["calibragem"] = GlobalConfig.MasterCalibration;
                 cfgObj["slot2"] = GlobalConfig.SecondarySlotEnabled;

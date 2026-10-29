@@ -68,6 +68,12 @@ public class GlobalConfigData
     public int RecognitionDebugTopN { get; set; } = 3;
     public int RecognitionDebugIntervalMs { get; set; } = 1000;
     public string RecognitionDebugDirectory { get; set; } = "benchmark_output\\recognition_debug";
+    public int StableConfirmations { get; set; } = 3;
+    public double ExitThresholdMargin { get; set; } = 0.05;
+    public double AmbiguityMargin { get; set; } = 0.02;
+    public int AttachmentCadence { get; set; } = 3;
+    public bool TelemetryEnabled { get; set; } = true;
+    public string TelemetryDirectory { get; set; } = "benchmark_output\\telemetry";
     public bool SoundsEnabled { get; set; } = true;
     public int MasterCalibration { get; set; } = 100;
     public bool SecondarySlotEnabled { get; set; } = false;
@@ -133,4 +139,25 @@ public sealed record MatchDebugResult(
     string? BestName,
     double BestScore,
     IReadOnlyList<MatchCandidateScore> RankedCandidates
-);
+)
+{
+    /// <summary>Candidatos descartados por serem maiores que a região capturada.</summary>
+    public int SkippedCandidates { get; init; }
+
+    public double Threshold { get; init; }
+
+    /// <summary>Diferença de score entre o 1º e o 2º colocados (score do 1º se for o único).</summary>
+    public double Margin { get; init; }
+
+    /// <summary>Melhor candidato por score, independente de ter passado do limiar.</summary>
+    public string? TopName => RankedCandidates.Count > 0 ? RankedCandidates[0].Name : null;
+}
+
+public enum ConfigIssueSeverity
+{
+    Info,
+    Warning,
+    Error
+}
+
+public sealed record ConfigIssue(ConfigIssueSeverity Severity, string Code, string Message);

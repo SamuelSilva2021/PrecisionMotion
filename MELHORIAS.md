@@ -40,4 +40,4 @@ Este documento registra as melhorias identificadas para evoluir a base atual do 
 
 ## Status
 - Documento criado.
-- Implementacao dos itens 2, 3, 4 e 5 nao foi iniciada neste passo.
+- Itens 2 a 5 implementados (histerese, painel de diagnostico, runner de calibracao, cadencias/buffers), alem de benchmark offline, validacao de config, telemetria, RecognitionService e engine baseado em Task/CancellationToken.

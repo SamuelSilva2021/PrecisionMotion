@@ -15,12 +15,10 @@ public sealed class StabilizationEngine : IDisposable
     private const double PadraoAgachado = -0.15;
     private const double GainMin = 10.0;
     private const double GainMax = 2000.0;
-    private const int StableReadsRequired = 3;
     private const int InventoryPollMs = 50;
+    private const int StancePollMs = 200;
     private const double InventoryMaxSeconds = 120.0;
-
-    private readonly record struct SlotAttachments(string? Optic, string? Component1, string? Component2);
-    private readonly record struct InventoryReading(string? Profile1, string? Profile2, SlotAttachments Slot1, SlotAttachments Slot2);
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(2);
 
     private static readonly int[] ResetKeys = {
         NativeMethods.VK_1, NativeMethods.VK_2, NativeMethods.VK_3, NativeMethods.VK_4, NativeMethods.VK_5,
@@ -30,9 +28,10 @@ public sealed class StabilizationEngine : IDisposable
     public ConfigProvider Config { get; }
     public PatternMatcher Recognizer { get; }
     public RecognitionDiagnostics Diagnostics { get; }
+    public IRecognitionService Recognition { get; }
     public DirectInputService InputService { get; }
 
-    public bool IsRunning { get; private set; }
+    public bool IsRunning => _cts is { IsCancellationRequested: false };
     public int ActiveSlot { get; private set; } = 1;
     public string Slot1Profile { get; private set; } = "M4";
     public string Slot2Profile { get; private set; } = "UNASSIGNED";
@@ -55,13 +54,11 @@ public sealed class StabilizationEngine : IDisposable
     private int _tabPressCount;
     private bool _initialReadCompleted;
     private double _subPixelAccumulator;
-    private readonly HashSet<(string, string)> _loggedWarnings = new();
 
-    private Thread? _stabilizationThread;
-    private Thread? _commandThread;
-    private Thread? _keyWatcherThread;
-    private Thread? _inventoryThread;
-    private Thread? _stanceThread;
+    // Protege o estado de slots/perfis compartilhado entre os loops de inventário, comandos e persistência.
+    private readonly object _stateLock = new();
+    private CancellationTokenSource? _cts;
+    private Task[] _tasks = Array.Empty<Task>();
 
     public StabilizationEngine(ConfigProvider config)
     {
@@ -71,10 +68,16 @@ public sealed class StabilizationEngine : IDisposable
             config.GlobalConfig.ActiveResolution,
             config.GlobalConfig.NormalizeRecognition);
         Diagnostics = new RecognitionDiagnostics(config.BaseDirectory, config.GlobalConfig);
+        var telemetry = new RecognitionTelemetry(
+            RecognitionTelemetry.ResolveDirectory(config.BaseDirectory, config.GlobalConfig.TelemetryDirectory),
+            config.GlobalConfig.TelemetryEnabled);
+        Recognition = new RecognitionService(config, Recognizer, Diagnostics, telemetry);
+        Recognition.OnLog = msg => OnLogMessage?.Invoke(msg);
         InputService = new DirectInputService();
 
         AimMode = config.GlobalConfig.AimMode;
         LoadSessionState();
+        Recognition.SeedStance(CurrentStance);
     }
 
     private void Log(string msg)
@@ -87,30 +90,61 @@ public sealed class StabilizationEngine : IDisposable
     public void Start()
     {
         if (IsRunning) return;
-        IsRunning = true;
 
-        _stabilizationThread = new Thread(StabilizationLoop) { IsBackground = true, Priority = ThreadPriority.Highest };
-        _commandThread = new Thread(CommandDispatchLoop) { IsBackground = true };
-        _keyWatcherThread = new Thread(KeyMonitorLoop) { IsBackground = true };
-        _inventoryThread = new Thread(InventorySessionLoop) { IsBackground = true };
-        _stanceThread = new Thread(StanceLoop) { IsBackground = true };
+        foreach (var issue in Config.LoadIssues.Where(i => i.Severity != ConfigIssueSeverity.Info))
+            Log($"[Config] {issue.Severity}: {issue.Message}");
 
-        _stabilizationThread.Start();
-        _commandThread.Start();
-        _keyWatcherThread.Start();
-        _inventoryThread.Start();
-        _stanceThread.Start();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        _tasks = new[]
+        {
+            RunLoop(StabilizationLoop, token, ThreadPriority.Highest),
+            RunLoop(CommandDispatchLoop, token),
+            RunLoop(KeyMonitorLoop, token),
+            RunLoop(InventorySessionLoop, token),
+            RunLoop(StanceLoop, token)
+        };
 
         Log($"[Engine] Inicializado com resolução {Config.GlobalConfig.ActiveResolution} | Modo mira: {AimMode}");
     }
 
+    // Cada loop roda numa thread dedicada (LongRunning); exceções inesperadas são logadas sem derrubar os demais.
+    private Task RunLoop(Action<CancellationToken> loop, CancellationToken token, ThreadPriority priority = ThreadPriority.Normal) =>
+        Task.Factory.StartNew(() =>
+        {
+            Thread.CurrentThread.Priority = priority;
+            try
+            {
+                loop(token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                Log($"[Engine] Loop {loop.Method.Name} encerrado por erro: {ex.Message}");
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
     public void Stop()
     {
-        if (!IsRunning) return;
-        IsRunning = false;
+        var cts = _cts;
+        if (cts == null || cts.IsCancellationRequested) return;
+
+        cts.Cancel();
+
+        // F10 chama Stop de dentro do loop de comandos; esperar a si mesmo só gastaria o timeout.
+        var self = Task.CurrentId;
+        var others = _tasks.Where(t => t.Id != self).ToArray();
+        try { Task.WaitAll(others, ShutdownTimeout); } catch (AggregateException) { }
+
         SaveSessionState();
+        Recognition.FlushTelemetry();
         Log("[Engine] Finalizado.");
     }
+
+    private static bool Sleep(CancellationToken token, int ms) => token.WaitHandle.WaitOne(ms);
 
     public CalculationResult CalculateCurrentStep()
     {
@@ -173,7 +207,8 @@ public sealed class StabilizationEngine : IDisposable
         );
     }
 
-    private void StabilizationLoop()
+
+    private void StabilizationLoop(CancellationToken token)
     {
         bool wasRightDown = false;
         bool isActivelyCompensating = false;
@@ -181,7 +216,7 @@ public sealed class StabilizationEngine : IDisposable
         const double tickSeconds = 0.015;
         int tickMs = (int)(tickSeconds * 1000);
 
-        while (IsRunning)
+        while (!token.IsCancellationRequested)
         {
             bool leftDown = DirectInputService.IsKeyPressed(NativeMethods.VK_LBUTTON);
             bool rightDown = DirectInputService.IsKeyPressed(NativeMethods.VK_RBUTTON);
@@ -232,21 +267,21 @@ public sealed class StabilizationEngine : IDisposable
                     _subPixelAccumulator -= pixels;
                 }
 
-                Thread.Sleep(tickMs);
+                Sleep(token, tickMs);
             }
             else
             {
                 isActivelyCompensating = false;
                 _subPixelAccumulator = 0.0;
-                Thread.Sleep(5);
+                Sleep(token, 5);
             }
         }
     }
 
-    private void KeyMonitorLoop()
+    private void KeyMonitorLoop(CancellationToken token)
     {
         bool wasPressed = false;
-        while (IsRunning)
+        while (!token.IsCancellationRequested)
         {
             bool hasChanged = DirectInputService.WasKeyPressedSinceLastQuery(NativeMethods.VK_TAB, out bool isDown);
             if ((isDown && !wasPressed) || (hasChanged && !isDown && !wasPressed))
@@ -254,276 +289,141 @@ public sealed class StabilizationEngine : IDisposable
                 Interlocked.Increment(ref _tabPressCount);
             }
             wasPressed = isDown;
-            Thread.Sleep(2);
+            Sleep(token, 2);
         }
     }
 
-    private void InventorySessionLoop()
+    private void InventorySessionLoop(CancellationToken token)
     {
-        int lastSeenTab = _tabPressCount;
-        InspectInventory(0.3, 0.5); // Initial check
+        int lastSeenTab = Volatile.Read(ref _tabPressCount);
+        InspectInventory(token, 0.3, 0.5); // Initial check
 
-        while (IsRunning)
+        while (!token.IsCancellationRequested)
         {
-            if (_tabPressCount == lastSeenTab)
+            if (Volatile.Read(ref _tabPressCount) == lastSeenTab)
             {
-                Thread.Sleep(2);
+                Sleep(token, 2);
                 continue;
             }
 
-            lastSeenTab = _tabPressCount;
-            InspectInventory();
-            lastSeenTab = _tabPressCount;
+            lastSeenTab = Volatile.Read(ref _tabPressCount);
+            InspectInventory(token);
+            lastSeenTab = Volatile.Read(ref _tabPressCount);
         }
     }
 
-    private void InspectInventory(double waitOpen = 2.0, double waitClose = 0.5)
+    private void InspectInventory(CancellationToken token, double waitOpen = 2.0, double waitClose = 0.5)
     {
-        var areas = new List<ScreenRegion>();
-        if (Config.Slot1Area.HasValue) areas.Add(Config.Slot1Area.Value);
-        if (Config.Slot2Area.HasValue) areas.Add(Config.Slot2Area.Value);
-
-        foreach (var list in Config.OpticCandidateAreas.Values) areas.AddRange(list);
-        foreach (var list in Config.Comp1CandidateAreas.Values) areas.AddRange(list);
-        foreach (var list in Config.Comp2CandidateAreas.Values) areas.AddRange(list);
-
-        if (areas.Count == 0) return;
-
-        int pad = PatternMatcher.IconPadding;
-        int minX = areas.Min(a => a.X) - pad;
-        int minY = areas.Min(a => a.Y) - pad;
-        int maxX = areas.Max(a => a.X + a.Width) + pad;
-        int maxY = areas.Max(a => a.Y + a.Height) + pad;
-
-        var bounding = new ScreenRegion(Math.Max(minX, 0), Math.Max(minY, 0), maxX - minX, maxY - minY);
-
         var stopwatch = Stopwatch.StartNew();
-        InventoryReading? last = null;
-        InventoryReading? applied = null;
-        int stableReads = 0;
+        InventoryRecognitionResult? applied = null;
         bool inventorySeen = false;
         double lastVisibleAt = 0.0;
 
+        Recognition.BeginInventorySession();
+
         // A sessão acompanha o inventário enquanto ele estiver aberto: trocas de arma/anexo feitas
         // depois da primeira leitura também são aplicadas, sem depender de um novo TAB.
-        while (IsRunning && stopwatch.Elapsed.TotalSeconds < InventoryMaxSeconds)
+        while (!token.IsCancellationRequested && stopwatch.Elapsed.TotalSeconds < InventoryMaxSeconds)
         {
             double elapsed = stopwatch.Elapsed.TotalSeconds;
+            var reading = Recognition.PollInventory();
 
-            Recognizer.StartCache(bounding);
-            try
+            if (!reading.Visible)
             {
-                var reading = ReadInventory();
+                if (elapsed - lastVisibleAt >= (inventorySeen ? waitClose : waitOpen))
+                    break;
+            }
+            else
+            {
+                inventorySeen = true;
+                lastVisibleAt = elapsed;
 
-                if (reading.Profile1 == null && reading.Profile2 == null)
+                // A histerese (N confirmações, limiares de entrada/saída, margem de ambiguidade) já foi aplicada pelo serviço.
+                if (reading.Ready && !reading.SameState(applied))
                 {
-                    last = null;
-                    stableReads = 0;
-                    if (elapsed - lastVisibleAt >= (inventorySeen ? waitClose : waitOpen))
-                        break;
-                }
-                else
-                {
-                    inventorySeen = true;
-                    lastVisibleAt = elapsed;
-                    stableReads = reading == last ? stableReads + 1 : 1;
-                    last = reading;
-
-                    if (stableReads >= StableReadsRequired && reading != applied)
-                    {
-                        ApplyInventoryState(reading);
-                        applied = reading;
-                    }
+                    ApplyInventoryState(reading);
+                    applied = reading;
                 }
             }
-            finally
+
+            Sleep(token, InventoryPollMs);
+        }
+    }
+
+    private void ApplyInventoryState(InventoryRecognitionResult reading)
+    {
+        lock (_stateLock)
+        {
+            bool changed = false;
+
+            if (!string.IsNullOrEmpty(reading.Profile1))
             {
-                Recognizer.ClearCache();
+                if (reading.Profile1 != Slot1Profile)
+                {
+                    if (_initialReadCompleted && (Slot1Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot1Profile)))
+                        ActiveSlot = 1;
+
+                    changed = true;
+                }
+
+                Slot1Optic = reading.Slot1.Optic ?? "";
+                Slot1Component1 = reading.Slot1.Component1;
+                Slot1Component2 = reading.Slot1.Component2;
+                Slot1Profile = reading.Profile1;
             }
 
-            Thread.Sleep(InventoryPollMs);
-        }
-    }
-
-    private InventoryReading ReadInventory()
-    {
-        string? p1 = null;
-        string? p2 = null;
-
-        if (Config.Slot1Area.HasValue)
-        {
-            using var frame = Recognizer.CaptureFrame(Config.Slot1Area.Value);
-            var result = Recognizer.MatchProfileDetailedFrame(
-                frame,
-                Config.GlobalConfig.ProfileMatchThreshold,
-                Config.GlobalConfig.RecognitionDebugTopN);
-            p1 = result.BestName;
-            MaybeLogRecognitionDebug("profile_slot1", "Perfil slot 1", result, frame);
-        }
-
-        if (Config.Slot2Area.HasValue)
-        {
-            using var frame = Recognizer.CaptureFrame(Config.Slot2Area.Value);
-            var result = Recognizer.MatchProfileDetailedFrame(
-                frame,
-                Config.GlobalConfig.ProfileMatchThreshold,
-                Config.GlobalConfig.RecognitionDebugTopN);
-            p2 = result.BestName;
-            MaybeLogRecognitionDebug("profile_slot2", "Perfil slot 2", result, frame);
-        }
-
-        // Anexos só entram na leitura de um slot cuja arma foi reconhecida, para não misturar
-        // anexos novos com o perfil antigo.
-        var s1 = p1 != null ? DetectAttachmentsForSlot(1) : default;
-        var s2 = p2 != null ? DetectAttachmentsForSlot(2) : default;
-        return new InventoryReading(p1, p2, s1, s2);
-    }
-
-    private void ApplyInventoryState(InventoryReading reading)
-    {
-        bool changed = false;
-
-        if (!string.IsNullOrEmpty(reading.Profile1))
-        {
-            if (reading.Profile1 != Slot1Profile)
+            if (!string.IsNullOrEmpty(reading.Profile2))
             {
-                if (_initialReadCompleted && (Slot1Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot1Profile)))
-                    ActiveSlot = 1;
+                if (reading.Profile2 != Slot2Profile)
+                {
+                    if (_initialReadCompleted && (Slot2Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot2Profile)))
+                        ActiveSlot = 2;
 
-                changed = true;
+                    changed = true;
+                }
+
+                Slot2Optic = reading.Slot2.Optic ?? "";
+                Slot2Component1 = reading.Slot2.Component1;
+                Slot2Component2 = reading.Slot2.Component2;
+                Slot2Profile = reading.Profile2;
             }
 
-            Slot1Optic = reading.Slot1.Optic ?? "";
-            Slot1Component1 = reading.Slot1.Component1;
-            Slot1Component2 = reading.Slot1.Component2;
-            Slot1Profile = reading.Profile1;
+            _initialReadCompleted = true;
+            SaveSessionState();
+            if (changed)
+                Log($"[Inventory] Atualizado -> Slot 1: {Slot1Profile} ({Slot1Optic}) | Slot 2: {Slot2Profile} ({Slot2Optic}) | Ativo: Slot {ActiveSlot}");
         }
-
-        if (!string.IsNullOrEmpty(reading.Profile2))
-        {
-            if (reading.Profile2 != Slot2Profile)
-            {
-                if (_initialReadCompleted && (Slot2Profile == "UNASSIGNED" || string.IsNullOrEmpty(Slot2Profile)))
-                    ActiveSlot = 2;
-
-                changed = true;
-            }
-
-            Slot2Optic = reading.Slot2.Optic ?? "";
-            Slot2Component1 = reading.Slot2.Component1;
-            Slot2Component2 = reading.Slot2.Component2;
-            Slot2Profile = reading.Profile2;
-        }
-
-        _initialReadCompleted = true;
-        SaveSessionState();
-        if (changed)
-            Log($"[Inventory] Atualizado -> Slot 1: {Slot1Profile} ({Slot1Optic}) | Slot 2: {Slot2Profile} ({Slot2Optic}) | Ativo: Slot {ActiveSlot}");
     }
 
-    private SlotAttachments DetectAttachmentsForSlot(int slot)
+    private void StanceLoop(CancellationToken token)
     {
-        string? optic = null, comp1 = null, comp2 = null;
-
-        if (Config.OpticCandidateAreas.TryGetValue(slot, out var opticAreas) && opticAreas.Count > 0)
-        {
-            var images = Config.OpticItems.Select(o => o.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-            var result = Recognizer.MatchComponentDetailed(
-                opticAreas,
-                images,
-                Config.GlobalConfig.OpticMatchThreshold,
-                Config.GlobalConfig.RecognitionDebugTopN);
-            optic = result.BestName;
-            MaybeLogRecognitionDebug($"optic_slot{slot}", $"Escopo slot {slot}", result, null);
-        }
-
-        if (Config.Comp1CandidateAreas.TryGetValue(slot, out var comp1Areas) && comp1Areas.Count > 0)
-        {
-            var images = Config.ComponentGroup1.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-            var result = Recognizer.MatchComponentDetailed(
-                comp1Areas,
-                images,
-                Config.GlobalConfig.ComponentMatchThreshold,
-                Config.GlobalConfig.RecognitionDebugTopN);
-            comp1 = result.BestName;
-            MaybeLogRecognitionDebug($"component1_slot{slot}", $"Componente 1 slot {slot}", result, null);
-        }
-
-        if (Config.Comp2CandidateAreas.TryGetValue(slot, out var comp2Areas) && comp2Areas.Count > 0)
-        {
-            var images = Config.ComponentGroup2.Select(c => c.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
-            var result = Recognizer.MatchComponentDetailed(
-                comp2Areas,
-                images,
-                Config.GlobalConfig.ComponentMatchThreshold,
-                Config.GlobalConfig.RecognitionDebugTopN);
-            comp2 = result.BestName;
-            MaybeLogRecognitionDebug($"component2_slot{slot}", $"Componente 2 slot {slot}", result, null);
-        }
-
-        return new SlotAttachments(optic, comp1, comp2);
-    }
-
-    private void StanceLoop()
-    {
-        var coords = Config.GlobalConfig.PostureCoords;
-        StanceType? candidate = null;
-
-        while (IsRunning)
+        while (!token.IsCancellationRequested)
         {
             try
             {
-                using var frame = Recognizer.CaptureFrame(coords);
-                var result = Recognizer.MatchStanceFrame(
-                    frame,
-                    Config.GlobalConfig.StanceMatchThreshold,
-                    Config.GlobalConfig.RecognitionDebugTopN);
-                MaybeLogRecognitionDebug("stance", "Postura", result, frame);
-                StanceType? detected = Enum.TryParse<StanceType>(result.BestName, out var parsed)
-                    ? parsed
-                    : null;
-                if (detected.HasValue && detected.Value != CurrentStance)
+                var result = Recognition.PollStance();
+                if (result.Changed && result.Stable.HasValue)
                 {
-                    if (detected.Value == candidate)
-                    {
-                        CurrentStance = detected.Value;
-                        Log($"[Stance] Atualizado: {CurrentStance}");
-                        candidate = null;
-                    }
-                    else
-                    {
-                        candidate = detected.Value;
-                    }
-                }
-                else
-                {
-                    candidate = null;
+                    CurrentStance = result.Stable.Value;
+                    Log($"[Stance] Atualizado: {CurrentStance}");
                 }
             }
-            catch { }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log($"[Stance] Falha na leitura: {ex.Message}");
+            }
 
-            Thread.Sleep(200);
+            Sleep(token, StancePollMs);
         }
     }
 
-    private void MaybeLogRecognitionDebug(string key, string label, MatchDebugResult result, OpenCvSharp.Mat? frame)
+    private void CommandDispatchLoop(CancellationToken token)
     {
-        if (!Diagnostics.ShouldEmit(key))
-            return;
-
-        string best = result.BestName ?? "nenhum";
-        string candidates = Diagnostics.FormatCandidates(result);
-        Log($"[RecognitionDebug] {label} -> best={best} score={result.BestScore:F3} top=[{candidates}]");
-        Diagnostics.SaveCrop(label, frame);
-    }
-
-    private void CommandDispatchLoop()
-    {
-        while (IsRunning)
+        while (!token.IsCancellationRequested)
         {
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F10))
             {
-                IsRunning = false;
+                Stop();
                 OnShutdownRequested?.Invoke();
                 break;
             }
@@ -531,7 +431,7 @@ public sealed class StabilizationEngine : IDisposable
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F6))
             {
                 OnRestoreUIRequested?.Invoke();
-                Thread.Sleep(300);
+                Sleep(token, 300);
             }
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F7))
@@ -539,57 +439,67 @@ public sealed class StabilizationEngine : IDisposable
                 AimMode = AimMode == "segurar" ? "alternar" : "segurar";
                 IsAimEngaged = false;
                 Log($"[AimMode] Alternado para: {AimMode}");
-                Thread.Sleep(300);
+                Sleep(token, 300);
             }
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F8))
             {
-                double prev = DynamicGain;
-                DynamicGain = Math.Max(GainMin, DynamicGain * 0.8);
-                SaveSessionState();
-                Log($"[Gain] Reduzido: {prev:F0} -> {DynamicGain:F0}");
-                Thread.Sleep(300);
+                lock (_stateLock)
+                {
+                    double prev = DynamicGain;
+                    DynamicGain = Math.Max(GainMin, DynamicGain * 0.8);
+                    SaveSessionState();
+                    Log($"[Gain] Reduzido: {prev:F0} -> {DynamicGain:F0}");
+                }
+                Sleep(token, 300);
             }
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F9))
             {
-                double prev = DynamicGain;
-                DynamicGain = Math.Min(GainMax, DynamicGain * 1.25);
-                SaveSessionState();
-                Log($"[Gain] Aumentado: {prev:F0} -> {DynamicGain:F0}");
-                Thread.Sleep(300);
+                lock (_stateLock)
+                {
+                    double prev = DynamicGain;
+                    DynamicGain = Math.Min(GainMax, DynamicGain * 1.25);
+                    SaveSessionState();
+                    Log($"[Gain] Aumentado: {prev:F0} -> {DynamicGain:F0}");
+                }
+                Sleep(token, 300);
             }
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F5))
             {
-                Slot1Profile = "UNASSIGNED";
-                Slot2Profile = "UNASSIGNED";
+                lock (_stateLock)
+                {
+                    Slot1Profile = "UNASSIGNED";
+                    Slot2Profile = "UNASSIGNED";
+                }
                 Log("[Profiles] Reset manual realizado (F5)");
-                Thread.Sleep(300);
+                Sleep(token, 300);
             }
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_1))
             {
-                if (ActiveSlot != 1)
-                {
-                    ActiveSlot = 1;
-                    Log($"[Slot] Ativo: Slot 1 ({Slot1Profile})");
-                    SaveSessionState();
-                }
-                Thread.Sleep(150);
+                SetActiveSlot(1, Slot1Profile);
+                Sleep(token, 150);
             }
             else if (DirectInputService.IsKeyPressed(NativeMethods.VK_2))
             {
-                if (ActiveSlot != 2)
-                {
-                    ActiveSlot = 2;
-                    Log($"[Slot] Ativo: Slot 2 ({Slot2Profile})");
-                    SaveSessionState();
-                }
-                Thread.Sleep(150);
+                SetActiveSlot(2, Slot2Profile);
+                Sleep(token, 150);
             }
 
-            Thread.Sleep(20);
+            Sleep(token, 20);
+        }
+    }
+
+    private void SetActiveSlot(int slot, string profile)
+    {
+        lock (_stateLock)
+        {
+            if (ActiveSlot == slot) return;
+            ActiveSlot = slot;
+            Log($"[Slot] Ativo: Slot {slot} ({profile})");
+            SaveSessionState();
         }
     }
 
@@ -616,7 +526,8 @@ public sealed class StabilizationEngine : IDisposable
             };
 
             string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(GetStateFilePath(), json);
+            lock (_stateLock)
+                File.WriteAllText(GetStateFilePath(), json);
         }
         catch { }
     }
@@ -650,10 +561,13 @@ public sealed class StabilizationEngine : IDisposable
         catch { }
     }
 
+
     public void Dispose()
     {
         Stop();
+        Recognition.Dispose();
         Recognizer.Dispose();
         InputService.Dispose();
+        _cts?.Dispose();
     }
 }

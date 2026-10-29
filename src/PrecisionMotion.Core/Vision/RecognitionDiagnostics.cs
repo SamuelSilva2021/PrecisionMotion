@@ -21,6 +21,8 @@ public sealed class RecognitionDiagnostics
 
     public bool IsEnabled => _config.RecognitionDebugEnabled;
 
+    public string OutputDirectory => _outputDirectory;
+
     public bool ShouldEmit(string key)
     {
         if (!IsEnabled)

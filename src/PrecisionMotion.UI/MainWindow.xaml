@@ -129,8 +129,8 @@
                                 <TextBlock Text="Calibragem Geral Dinâmica" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
                                 <TextBlock x:Name="BigSliderLabel" Text="100%" FontSize="16" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Right"/>
                             </Grid>
-                            <Slider x:Name="BigSlider" Minimum="10" Maximum="200" Value="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnBigSliderValueChanged"/>
-                            <TextBlock Text="Multiplica uniformemente o ganho de amortecimento para todos os perfis e configurações." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+                            <Slider x:Name="BigSlider" Minimum="10" Maximum="300" Value="100" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnBigSliderValueChanged"/>
+                            <TextBlock Text="100% = calibragem padrão de cada arma. Aumente para mais auxílio contra recoil em todas as armas, diminua para menos." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,0"/>
                         </StackPanel>
                     </Border>
 

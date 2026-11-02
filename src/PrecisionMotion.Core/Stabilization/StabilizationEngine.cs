@@ -177,7 +177,8 @@ public sealed class StabilizationEngine : IDisposable
         if (profileData?.Pattern != null && profileData.Pattern.Count > 0)
             baseRate = profileData.Pattern.Max(p => Math.Abs(p));
 
-        double globalFactor = profileData?.IndividualMultiplier ?? 1.0;
+        // Calibragem geral (slider): escala a compensação de todas as armas, preservando a calibragem de cada uma.
+        double globalFactor = Config.MasterCalibrationFactor;
 
         Config.ProfileOverrides.TryGetValue(profileName, out var ov);
         double arma = ov?.IndividualMultiplier ?? (profileData?.IndividualMultiplier ?? PadraoArma);

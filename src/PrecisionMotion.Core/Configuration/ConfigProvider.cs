@@ -509,44 +509,19 @@ public class ConfigProvider
         catch { }
     }
 
+    public const int MasterCalibrationMin = 10;
+    public const int MasterCalibrationMax = 300;
+
+    /// <summary>
+    /// Calibragem geral: fator percentual aplicado em tempo de execução sobre a compensação de TODAS as armas.
+    /// Cada arma mantém a calibragem própria (pattern + sliders do editor); 100 = calibragem padrão, acima
+    /// aumenta o auxílio contra recoil e abaixo diminui. Não reescreve nenhum arquivo de arma.
+    /// </summary>
+    public double MasterCalibrationFactor => GlobalConfig.MasterCalibration / 100.0;
+
     public void ApplyMasterCalibration(int sliderValue)
     {
-        GlobalConfig.MasterCalibration = sliderValue;
-        double factor = sliderValue / 100.0;
-
-        foreach (var fname in ParamFiles)
-        {
-            string path = Path.Combine(BaseDirectory, "Configs", "calibragem", fname);
-            if (!File.Exists(path)) continue;
-
-            try
-            {
-                string json = File.ReadAllText(path);
-                var node = JsonNode.Parse(json);
-                if (node?["weapons"] is JsonArray wpArray)
-                {
-                    foreach (var w in wpArray)
-                    {
-                        if (w is JsonObject wObj)
-                        {
-                            wObj["multiplicador_individual"] = factor;
-                            if (wObj.ContainsKey("multiplicadorempe"))
-                                wObj["multiplicadorempe"] = factor;
-                            if (wObj.ContainsKey("multiplicadoragachado"))
-                                wObj["multiplicadoragachado"] = factor * 0.8;
-                        }
-                    }
-                }
-
-                if (node != null)
-                {
-                    File.WriteAllText(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-                }
-            }
-            catch { }
-        }
-
+        GlobalConfig.MasterCalibration = Math.Clamp(sliderValue, MasterCalibrationMin, MasterCalibrationMax);
         SaveGlobalConfig();
-        LoadCalibrationParameters();
     }
 }

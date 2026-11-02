@@ -64,3 +64,56 @@ public class StabilizationMathTests
         Assert.InRange(ratio, 1.48, 1.52);
     }
 }
+
+public class MasterCalibrationTests
+{
+    [Fact]
+    public void MasterCalibration_ScalesEveryWeaponProportionallyAndKeepsTheirDifferences()
+    {
+        var config = new ConfigProvider();
+        using var engine = new StabilizationEngine(config);
+        int original = config.GlobalConfig.MasterCalibration;
+        try
+        {
+            string[] weapons = { "M4", "AKM" };
+            var baseline = new Dictionary<string, double>();
+            var scaled = new Dictionary<string, double>();
+
+            foreach (var w in weapons)
+            {
+                typeof(StabilizationEngine).GetProperty("Slot1Profile")!.SetValue(engine, w);
+                config.GlobalConfig.MasterCalibration = 100;
+                baseline[w] = engine.CalculateCurrentStep().VelocityPxPerSec;
+                config.GlobalConfig.MasterCalibration = 200;
+                scaled[w] = engine.CalculateCurrentStep().VelocityPxPerSec;
+            }
+
+            foreach (var w in weapons)
+                Assert.InRange(scaled[w] / baseline[w], 1.99, 2.01);
+
+            // A diferença de calibragem entre as armas se mantém (a razão M4/AKM não muda com o slider).
+            Assert.InRange((scaled["M4"] / scaled["AKM"]) / (baseline["M4"] / baseline["AKM"]), 0.99, 1.01);
+        }
+        finally
+        {
+            config.GlobalConfig.MasterCalibration = original;
+        }
+    }
+
+    [Fact]
+    public void ApplyMasterCalibration_DoesNotRewriteWeaponFilesAndClampsRange()
+    {
+        using var data = new TestDataDir();
+        data.WriteConfig();
+        data.WriteCalibration();
+        data.WriteResolutionParameters();
+        string path = Path.Combine(data.CalibrationDir, "parameter1.json");
+        string before = File.ReadAllText(path);
+
+        var config = new ConfigProvider(data.Root);
+        config.ApplyMasterCalibration(999);
+
+        Assert.Equal(ConfigProvider.MasterCalibrationMax, config.GlobalConfig.MasterCalibration);
+        Assert.Equal(before, File.ReadAllText(path));
+    }
+}

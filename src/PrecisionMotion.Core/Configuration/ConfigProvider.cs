@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using PrecisionMotion.Core.Models;
@@ -117,6 +118,10 @@ public class ConfigProvider
         LoadCalibrationParameters();
         LoadStanceCoordinates();
         LoadResolutionComponents();
+
+        string tuningPath = Path.Combine(BaseDirectory, "Configs", "geral", "config.json");
+        if (File.Exists(tuningPath))
+            _tuningStamp = File.GetLastWriteTimeUtc(tuningPath);
     }
 
     private void LoadGlobalConfig()
@@ -189,6 +194,9 @@ public class ConfigProvider
                 if (cfg.TryGetProperty("leitura_postura", out var stanceReadProp))
                     GlobalConfig.StanceReadingEnabled = stanceReadProp.GetBoolean();
 
+                if (cfg.TryGetProperty("estado_validade_min", out var stateAgeProp))
+                    GlobalConfig.StateMaxAgeMinutes = ClampPositiveInt("estado_validade_min", stateAgeProp.GetInt32(), GlobalConfig.StateMaxAgeMinutes, 1, 1440);
+
                 if (cfg.TryGetProperty("visao_ativa", out var visionProp))
                     GlobalConfig.VisionEnabled = visionProp.GetBoolean();
 
@@ -221,6 +229,8 @@ public class ConfigProvider
 
                 if (cfg.TryGetProperty("calibragem", out var calProp))
                     GlobalConfig.MasterCalibration = calProp.GetInt32();
+
+                LoadWeaponCalibration(cfg);
 
                 if (cfg.TryGetProperty("slot2", out var s2Prop))
                     GlobalConfig.SecondarySlotEnabled = s2Prop.GetBoolean();
@@ -274,6 +284,12 @@ public class ConfigProvider
                     {
                         foreach (var val in patArray.EnumerateArray())
                             item.Pattern.Add(val.GetDouble());
+                    }
+
+                    if (wp.TryGetProperty("total_time", out var timeArray) && timeArray.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var val in timeArray.EnumerateArray())
+                            item.TotalTime.Add(val.GetDouble());
                     }
 
                     string checkField1 = $"check_area_{GlobalConfig.ActiveResolution}";
@@ -494,11 +510,16 @@ public class ConfigProvider
                 cfgObj["histerese_margem_ambiguidade"] = GlobalConfig.AmbiguityMargin;
                 cfgObj["cadencia_anexos"] = GlobalConfig.AttachmentCadence;
                 cfgObj["visao_ativa"] = GlobalConfig.VisionEnabled;
+                cfgObj["estado_validade_min"] = GlobalConfig.StateMaxAgeMinutes;
                 cfgObj["leitura_postura"] = GlobalConfig.StanceReadingEnabled;
                 cfgObj["telemetria"] = GlobalConfig.TelemetryEnabled;
                 cfgObj["telemetria_diretorio"] = GlobalConfig.TelemetryDirectory;
                 cfgObj["sons"] = GlobalConfig.SoundsEnabled;
                 cfgObj["calibragem"] = GlobalConfig.MasterCalibration;
+                var weaponCalibration = new JsonObject();
+                foreach (var entry in _weaponCalibration.OrderBy(e => e.Key, StringComparer.OrdinalIgnoreCase))
+                    weaponCalibration[entry.Key] = entry.Value;
+                cfgObj["calibragem_armas"] = weaponCalibration;
                 cfgObj["slot2"] = GlobalConfig.SecondarySlotEnabled;
                 cfgObj["dmrs"] = GlobalConfig.DmrsEnabled;
                 cfgObj["invertslots"] = GlobalConfig.InvertSlots;
@@ -507,6 +528,40 @@ public class ConfigProvider
             }
         }
         catch { }
+    }
+
+    private DateTime _tuningStamp = DateTime.MinValue;
+
+    /// <summary>
+    /// Releitura a quente dos ajustes finos (calibragem geral) quando o
+    /// config.json muda em disco. Permite calibrar no campo de treino editando o arquivo, sem reiniciar o motor.
+    /// </summary>
+    public bool RefreshTuningIfChanged()
+    {
+        string cfgPath = Path.Combine(BaseDirectory, "Configs", "geral", "config.json");
+        try
+        {
+            if (!File.Exists(cfgPath)) return false;
+            var stamp = File.GetLastWriteTimeUtc(cfgPath);
+
+            if (stamp == _tuningStamp) return false;
+            _tuningStamp = stamp;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
+            if (!doc.RootElement.TryGetProperty("configs", out var arr) || arr.GetArrayLength() == 0) return false;
+            var cfg = arr[0];
+
+            if (cfg.TryGetProperty("calibragem", out var cal) && cal.TryGetInt32(out int calValue))
+                GlobalConfig.MasterCalibration = Math.Clamp(calValue, MasterCalibrationMin, MasterCalibrationMax);
+            LoadWeaponCalibration(cfg);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException)
+        {
+            // Arquivo no meio de uma gravação do editor: tenta de novo na próxima checagem.
+            _tuningStamp = DateTime.UnixEpoch;
+            return false;
+        }
     }
 
     public const int MasterCalibrationMin = 10;
@@ -523,5 +578,55 @@ public class ConfigProvider
     {
         GlobalConfig.MasterCalibration = Math.Clamp(sliderValue, MasterCalibrationMin, MasterCalibrationMax);
         SaveGlobalConfig();
+    }
+
+    /// <summary>
+    /// Ponto de partida quando a arma ainda não tem ajuste próprio. O pico do pattern da M4 vem de um valor
+    /// negativo (-5) e fica no dobro do nível sustentado (2,513); 75 é o meio do caminho entre os dois.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, int> DefaultWeaponCalibration =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["M4"] = 75 };
+
+    private readonly ConcurrentDictionary<string, int> _weaponCalibration = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Ajuste percentual só daquela arma, somado à calibragem geral (chave calibragem_armas do config.json).</summary>
+    public int WeaponCalibrationPercent(string? weapon)
+    {
+        if (string.IsNullOrEmpty(weapon)) return 100;
+        if (_weaponCalibration.TryGetValue(weapon, out int percent)) return percent;
+        return DefaultWeaponCalibration.TryGetValue(weapon, out int fallback) ? fallback : 100;
+    }
+
+    public double WeaponCalibrationFactor(string? weapon) => WeaponCalibrationPercent(weapon) / 100.0;
+
+    public int AdjustWeaponCalibration(string weapon, int delta)
+    {
+        int percent = Math.Clamp(WeaponCalibrationPercent(weapon) + delta, MasterCalibrationMin, MasterCalibrationMax);
+        _weaponCalibration[weapon] = percent;
+        SaveGlobalConfig();
+        return percent;
+    }
+
+    private void LoadWeaponCalibration(JsonElement cfg)
+    {
+        if (!cfg.TryGetProperty("calibragem_armas", out var weapons) || weapons.ValueKind != JsonValueKind.Object)
+        {
+            _weaponCalibration.Clear();
+            return;
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var weapon in weapons.EnumerateObject())
+        {
+            if (!weapon.Value.TryGetInt32(out int percent)) continue;
+            names.Add(weapon.Name);
+            _weaponCalibration[weapon.Name] = Math.Clamp(percent, MasterCalibrationMin, MasterCalibrationMax);
+        }
+
+        foreach (string name in _weaponCalibration.Keys)
+        {
+            if (!names.Contains(name))
+                _weaponCalibration.TryRemove(name, out _);
+        }
     }
 }

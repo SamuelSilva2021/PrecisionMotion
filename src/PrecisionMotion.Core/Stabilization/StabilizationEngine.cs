@@ -15,7 +15,9 @@ public sealed class StabilizationEngine : IDisposable
     private const double PadraoAgachado = -0.15;
     private const double GainMin = 10.0;
     private const double GainMax = 2000.0;
-    private const int InventoryPollMs = 100;
+    private const int WeaponCalibrationStep = 5;
+    private const double MinTimedBurstSeconds = 0.3;
+    private const int InventoryPollMs = 40;
     private const int InventorySettledPollMs = 250;
     private const double TabCloseDebounceSeconds = 0.4;
     private const int StanceIdleMs = 400;
@@ -57,6 +59,7 @@ public sealed class StabilizationEngine : IDisposable
     private int _tabPressCount;
     private bool _initialReadCompleted;
     private volatile bool _isFiring;
+    private string? _startupNotice;
     private double _subPixelAccumulator;
 
     // Protege o estado de slots/perfis compartilhado entre os loops de inventário, comandos e persistência.
@@ -94,6 +97,9 @@ public sealed class StabilizationEngine : IDisposable
     public void Start()
     {
         if (IsRunning) return;
+
+        if (_startupNotice != null)
+            Log(_startupNotice);
 
         foreach (var issue in Config.LoadIssues.Where(i => i.Severity != ConfigIssueSeverity.Info))
             Log($"[Config] {issue.Severity}: {issue.Message}");
@@ -168,14 +174,19 @@ public sealed class StabilizationEngine : IDisposable
 
     private static bool Sleep(CancellationToken token, int ms) => token.WaitHandle.WaitOne(ms);
 
-    public CalculationResult CalculateCurrentStep()
+    /// <param name="burstSeconds">Tempo desde o início da rajada; só tem efeito na BERYL.</param>
+    public CalculationResult CalculateCurrentStep(double? burstSeconds = null)
     {
         string profileName = ActiveSlot == 1 ? Slot1Profile : Slot2Profile;
         Config.Profiles.TryGetValue(profileName, out var profileData);
 
         double baseRate = 1.0;
         if (profileData?.Pattern != null && profileData.Pattern.Count > 0)
-            baseRate = profileData.Pattern.Max(p => Math.Abs(p));
+        {
+            baseRate = RecoilEnvelope.UsesTimeShape(profileName) && burstSeconds.HasValue
+                ? RecoilEnvelope.Rate(profileData.Pattern, profileData.TotalTime, burstSeconds.Value, RecoilEnvelope.BerylFlatten)
+                : RecoilEnvelope.Peak(profileData.Pattern);
+        }
 
         // Calibragem geral (slider): escala a compensação de todas as armas, preservando a calibragem de cada uma.
         double globalFactor = Config.MasterCalibrationFactor;
@@ -213,7 +224,8 @@ public sealed class StabilizationEngine : IDisposable
         double c1Factor = Math.Max(0.1, 1.0 - red1);
         double c2Factor = Math.Max(0.1, 1.0 - red2);
 
-        double velocity = baseRate * globalFactor * stanceFactor * opticFactor * c1Factor * c2Factor * DynamicGain;
+        double weaponFactor = Config.WeaponCalibrationFactor(profileName);
+        double velocity = baseRate * globalFactor * weaponFactor * stanceFactor * opticFactor * c1Factor * c2Factor * DynamicGain;
 
         return new CalculationResult(
             BaseRate: baseRate,
@@ -236,8 +248,13 @@ public sealed class StabilizationEngine : IDisposable
         bool wasRightDown = false;
         bool isActivelyCompensating = false;
         long lastVisualCheckTicks = 0;
+        long burstStartTicks = 0;
         const double tickSeconds = 0.015;
         int tickMs = (int)(tickSeconds * 1000);
+        var timing = new BurstTimingStats();
+        long lastStepTicks = 0;
+        double lastVelocity = 0.0;
+        int lastPixels = 0;
 
         while (!token.IsCancellationRequested)
         {
@@ -274,16 +291,28 @@ public sealed class StabilizationEngine : IDisposable
 
             if (leftDown && IsAimEngaged)
             {
-                var calc = CalculateCurrentStep();
+                if (!isActivelyCompensating)
+                    burstStartTicks = Stopwatch.GetTimestamp();
+
+                var calc = CalculateCurrentStep((Stopwatch.GetTimestamp() - burstStartTicks) / (double)Stopwatch.Frequency);
                 if (!isActivelyCompensating)
                 {
-                    Log($"[Motion] Ativo -> Slot {ActiveSlot}: {(ActiveSlot == 1 ? Slot1Profile : Slot2Profile)} | Postura: {CurrentStance} | Velocidade: {calc.VelocityPxPerSec:F0} px/s");
+                    Log($"[Motion] Ativo -> Slot {ActiveSlot}: {(ActiveSlot == 1 ? Slot1Profile : Slot2Profile)} | Postura: {CurrentStance} | Velocidade: {calc.VelocityPxPerSec:F0} px/s | Arma: {Config.WeaponCalibrationPercent(ActiveSlot == 1 ? Slot1Profile : Slot2Profile)}% | Anexos: {calc.Component1Image}, {calc.Component2Image} | Mira: {calc.OpticImage}{TemporalModeNote()}");
                     isActivelyCompensating = true;
+                    timing.Reset();
+                    lastStepTicks = 0;
                 }
+
+                long stepTicks = Stopwatch.GetTimestamp();
+                if (lastStepTicks != 0)
+                    timing.AddInterval((stepTicks - lastStepTicks) / (double)Stopwatch.Frequency, lastVelocity, lastPixels);
+                lastStepTicks = stepTicks;
+                lastVelocity = calc.VelocityPxPerSec;
 
                 double step = calc.VelocityPxPerSec * tickSeconds;
                 _subPixelAccumulator += step;
                 int pixels = (int)_subPixelAccumulator;
+                lastPixels = pixels;
 
                 if (pixels != 0)
                 {
@@ -295,11 +324,23 @@ public sealed class StabilizationEngine : IDisposable
             }
             else
             {
+                if (isActivelyCompensating && timing.TotalSeconds >= MinTimedBurstSeconds)
+                    Log($"[Laço] Rajada {timing.TotalSeconds:F2} s | passo médio {timing.MeanIntervalSeconds * 1000:F1} ms, máx {timing.MaxIntervalSeconds * 1000:F1} ms (nominal {tickSeconds * 1000:F0} ms) | movimento {timing.ActualPxPerSec:F0} de {timing.RequestedPxPerSec:F0} px/s ({timing.DeliveredRatio:P0})");
+
                 isActivelyCompensating = false;
                 _subPixelAccumulator = 0.0;
                 Sleep(token, 10);
             }
         }
+    }
+
+    private string TemporalModeNote()
+    {
+        string name = ActiveSlot == 1 ? Slot1Profile : Slot2Profile;
+        if (!RecoilEnvelope.UsesTimeShape(name)) return "";
+        return Config.Profiles.TryGetValue(name, out var p) && RecoilEnvelope.IsTimeShaped(p.Pattern)
+            ? " | curva temporal"
+            : " | curva temporal indisponível (pattern com valor negativo): pico constante";
     }
 
     private void KeyMonitorLoop(CancellationToken token)
@@ -336,12 +377,13 @@ public sealed class StabilizationEngine : IDisposable
         }
     }
 
-    private void InspectInventory(CancellationToken token, double waitOpen = 2.0, double waitClose = 0.5)
+    private void InspectInventory(CancellationToken token, double waitOpen = 2.0, double waitClose = 3.0)
     {
         var stopwatch = Stopwatch.StartNew();
         int sessionTab = Volatile.Read(ref _tabPressCount);
         InventoryRecognitionResult? applied = null;
         bool inventorySeen = false;
+        double firstVisibleAt = 0.0;
         double lastVisibleAt = 0.0;
 
         Recognition.BeginInventorySession();
@@ -366,13 +408,14 @@ public sealed class StabilizationEngine : IDisposable
             }
             else
             {
+                if (!inventorySeen) firstVisibleAt = elapsed;
                 inventorySeen = true;
                 lastVisibleAt = elapsed;
 
                 // A histerese (N confirmações, limiares de entrada/saída, margem de ambiguidade) já foi aplicada pelo serviço.
                 if (reading.Ready && !reading.SameState(applied))
                 {
-                    ApplyInventoryState(reading);
+                    ApplyInventoryState(reading, firstVisibleAt, elapsed);
                     applied = reading;
                 }
             }
@@ -382,7 +425,7 @@ public sealed class StabilizationEngine : IDisposable
         }
     }
 
-    private void ApplyInventoryState(InventoryRecognitionResult reading)
+    private void ApplyInventoryState(InventoryRecognitionResult reading, double visibleSeconds, double appliedSeconds)
     {
         lock (_stateLock)
         {
@@ -423,7 +466,7 @@ public sealed class StabilizationEngine : IDisposable
             _initialReadCompleted = true;
             SaveSessionState();
             if (changed)
-                Log($"[Inventory] Atualizado -> Slot 1: {Slot1Profile} ({Slot1Optic}) | Slot 2: {Slot2Profile} ({Slot2Optic}) | Ativo: Slot {ActiveSlot}");
+                Log($"[Inventory] Atualizado -> Slot 1: {Slot1Profile} ({Slot1Optic}) | Slot 2: {Slot2Profile} ({Slot2Optic}) | Ativo: Slot {ActiveSlot} | inventário visível em {visibleSeconds * 1000:F0} ms, aplicado em {appliedSeconds * 1000:F0} ms (contado do TAB)");
         }
     }
 
@@ -465,8 +508,21 @@ public sealed class StabilizationEngine : IDisposable
 
     private void CommandDispatchLoop(CancellationToken token)
     {
+        long lastTuningCheck = 0;
         while (!token.IsCancellationRequested)
         {
+            // Ajustes finos editados no config.json valem na hora (1 checagem por segundo, só compara o timestamp).
+            long nowTicks = Stopwatch.GetTimestamp();
+            if ((nowTicks - lastTuningCheck) >= Stopwatch.Frequency)
+            {
+                lastTuningCheck = nowTicks;
+                if (Config.RefreshTuningIfChanged())
+                {
+                    var g = Config.GlobalConfig;
+                    Log($"[Config] Ajustes recarregados: calibragem {g.MasterCalibration}%");
+                }
+            }
+
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F10))
             {
                 Stop();
@@ -490,25 +546,13 @@ public sealed class StabilizationEngine : IDisposable
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F8))
             {
-                lock (_stateLock)
-                {
-                    double prev = DynamicGain;
-                    DynamicGain = Math.Max(GainMin, DynamicGain * 0.8);
-                    SaveSessionState();
-                    Log($"[Gain] Reduzido: {prev:F0} -> {DynamicGain:F0}");
-                }
+                AdjustActiveWeapon(-WeaponCalibrationStep);
                 Sleep(token, 300);
             }
 
             if (DirectInputService.IsKeyPressed(NativeMethods.VK_F9))
             {
-                lock (_stateLock)
-                {
-                    double prev = DynamicGain;
-                    DynamicGain = Math.Min(GainMax, DynamicGain * 1.25);
-                    SaveSessionState();
-                    Log($"[Gain] Aumentado: {prev:F0} -> {DynamicGain:F0}");
-                }
+                AdjustActiveWeapon(WeaponCalibrationStep);
                 Sleep(token, 300);
             }
 
@@ -536,6 +580,24 @@ public sealed class StabilizationEngine : IDisposable
 
             Sleep(token, 20);
         }
+    }
+
+    // F8/F9 ajustam só a arma em mãos; as demais continuam como estão.
+    private void AdjustActiveWeapon(int delta)
+    {
+        string weapon;
+        lock (_stateLock)
+            weapon = ActiveSlot == 1 ? Slot1Profile : Slot2Profile;
+
+        if (!Config.Profiles.ContainsKey(weapon))
+        {
+            Log($"[Arma] Sem arma reconhecida no slot ativo ({weapon}): abra o inventário (TAB) antes de ajustar.");
+            return;
+        }
+
+        int previous = Config.WeaponCalibrationPercent(weapon);
+        int current = Config.AdjustWeaponCalibration(weapon, delta);
+        Log($"[Arma] {weapon}: força {previous}% -> {current}%");
     }
 
     private void SetActiveSlot(int slot, string profile)
@@ -588,6 +650,20 @@ public sealed class StabilizationEngine : IDisposable
             string json = File.ReadAllText(path);
             var state = JsonSerializer.Deserialize<MotionSessionState>(json);
             if (state == null) return;
+
+            if (state.DynamicGain >= GainMin && state.DynamicGain <= GainMax)
+                DynamicGain = state.DynamicGain;
+
+            // Armas salvas de uma partida anterior não valem para a atual: sem leitura do inventário (TAB)
+            // o motor compensaria com a arma errada. Só o ganho salvo é mantido.
+            double ageMinutes = (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - state.SavedTimestamp) / 60.0;
+            if (ageMinutes > Config.GlobalConfig.StateMaxAgeMinutes)
+            {
+                Slot1Profile = "UNASSIGNED";
+                Slot2Profile = "UNASSIGNED";
+                _startupNotice = $"[Inventory] Armas salvas ({state.Slot1Profile}/{state.Slot2Profile}) são de uma sessão anterior e foram descartadas. Abra o inventário (TAB) para ler as armas atuais.";
+                return;
+            }
 
             ActiveSlot = state.ActiveSlot is 1 or 2 ? state.ActiveSlot : 1;
             if (!string.IsNullOrEmpty(state.Slot1Profile)) Slot1Profile = state.Slot1Profile;

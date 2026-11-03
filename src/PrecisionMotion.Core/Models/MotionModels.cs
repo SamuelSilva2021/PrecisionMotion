@@ -27,6 +27,9 @@ public class MotionProfileItem
     [JsonPropertyName("pattern")]
     public List<double> Pattern { get; set; } = new();
 
+    [JsonPropertyName("total_time")]
+    public List<double> TotalTime { get; set; } = new();
+
     [JsonPropertyName("multiplicador_individual")]
     public double IndividualMultiplier { get; set; } = 1.0;
 
@@ -73,6 +76,7 @@ public class GlobalConfigData
     public double AmbiguityMargin { get; set; } = 0.02;
     public int AttachmentCadence { get; set; } = 3;
     public bool VisionEnabled { get; set; } = true;
+    public int StateMaxAgeMinutes { get; set; } = 20;
     public bool StanceReadingEnabled { get; set; } = true;
     public bool TelemetryEnabled { get; set; } = true;
     public string TelemetryDirectory { get; set; } = "benchmark_output\\telemetry";

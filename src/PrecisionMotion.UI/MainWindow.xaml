@@ -59,7 +59,7 @@
                         <TextBlock Text="Atalhos Ativos:" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,2"/>
                         <TextBlock Text="• F6 : Restaurar Menu" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock Text="• F7 : Alternar Mira (Hold/Toggle)" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
-                        <TextBlock Text="• F8/F9 : Ajustar Força (-20%/+25%)" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Text="• F8/F9 : Força da arma em mãos (-5%/+5%)" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
                         <TextBlock Text="• F10 : Encerrar Tudo" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
                     </StackPanel>
                 </Border>
@@ -117,8 +117,7 @@
                                 <CheckBox x:Name="CheckSlot2" Content="Monitorar Canal Secundário (Slot 2)" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
                                 <CheckBox x:Name="CheckDmrs" Content="Habilitar Perfis DMRs" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
                                 <CheckBox x:Name="CheckInvertSlots" Content="Inverter Mapeamento de Canais" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,6"/>
-                                <CheckBox x:Name="CheckSounds" Content="Efeitos Sonoros de Confirmação" Foreground="{StaticResource TextPrimaryBrush}" IsChecked="True"/>
-                            </StackPanel>
+                                <CheckBox x:Name="CheckSounds" Content="Efeitos Sonoros de Confirmação" Foreground="{StaticResource TextPrimaryBrush}" IsChecked="True" Margin="0,0,0,6"/>                            </StackPanel>
                         </Border>
                     </Grid>
 

@@ -24,6 +24,11 @@ public interface IRecognitionService : IDisposable
 
 public sealed class RecognitionService : IRecognitionService
 {
+    // Anexo cujo melhor candidato vence o 2º com folga é reconhecido mesmo um pouco abaixo do limiar. O ícone do
+    // compensador oscila entre 0,68 e 0,71 com margem ~0,2; um slot vazio fica perto de 0,45 sem margem.
+    private const double DecisiveMargin = 0.10;
+    private const double DecisiveThresholdRelief = 0.10;
+
     private readonly ConfigProvider _config;
     private readonly PatternMatcher _matcher;
     private readonly RecognitionDiagnostics _diagnostics;
@@ -64,6 +69,9 @@ public sealed class RecognitionService : IRecognitionService
         return new HysteresisTracker(g.StableConfirmations, g.ExitThresholdMargin, g.AmbiguityMargin);
     }
 
+    public static double ComponentThreshold(MatchDebugResult result, double threshold) =>
+        result.Margin >= DecisiveMargin ? threshold - DecisiveThresholdRelief : threshold;
+
     public void BeginInventorySession()
     {
         _profile1.Reset();
@@ -91,7 +99,9 @@ public sealed class RecognitionService : IRecognitionService
             if (raw1?.BestName == null && raw2?.BestName == null)
                 return InventoryRecognitionResult.Hidden;
 
-            bool readAttachments = _pollIndex % Math.Max(1, g.AttachmentCadence) == 0;
+            // Enquanto o estado não estabilizou, anexos são lidos a cada leitura (a sessão quer o resultado o
+            // quanto antes); depois de estável, a cadência configurada reduz o custo da vigilância.
+            bool readAttachments = !IsReady() || _pollIndex % Math.Max(1, g.AttachmentCadence) == 0;
             _pollIndex++;
 
             if (_config.Slot1Area.HasValue) _profile1.Observe(raw1!, g.ProfileMatchThreshold);
@@ -105,8 +115,7 @@ public sealed class RecognitionService : IRecognitionService
 
             var slot1 = StableAttachments(1);
             var slot2 = StableAttachments(2);
-            bool ready = (_profile1.IsSettled || _profile2.IsSettled)
-                && SlotSettled(1, _profile1) && SlotSettled(2, _profile2);
+            bool ready = IsReady();
 
             PublishStable("profile_slot1", _profile1.Current);
             PublishStable("profile_slot2", _profile2.Current);
@@ -178,8 +187,9 @@ public sealed class RecognitionService : IRecognitionService
         var images = items.Select(i => i.CheckImage).Where(s => !string.IsNullOrEmpty(s)).ToList();
         var result = _matcher.MatchComponentDetailed(areas, images, threshold, _config.GlobalConfig.RecognitionDebugTopN);
         var tracker = _attachments[(slot, kind)];
-        tracker.Observe(result, threshold, allowNone: true);
-        Publish($"{kind}_slot{slot}", label, result, threshold, Bounds(areas), tracker.Current, null);
+        double effective = kind == "optic" ? threshold : ComponentThreshold(result, threshold);
+        tracker.Observe(result, effective, allowNone: true);
+        Publish($"{kind}_slot{slot}", label, result, effective, Bounds(areas), tracker.Current, null);
     }
 
     private SlotAttachments StableAttachments(int slot)
@@ -190,6 +200,9 @@ public sealed class RecognitionService : IRecognitionService
             Value(_attachments[(slot, "component1")]),
             Value(_attachments[(slot, "component2")]));
     }
+
+    private bool IsReady() =>
+        (_profile1.IsSettled || _profile2.IsSettled) && SlotSettled(1, _profile1) && SlotSettled(2, _profile2);
 
     /// <summary>Um slot sem arma estável não bloqueia; com arma, cada categoria configurada precisa ter estabilizado.</summary>
     private bool SlotSettled(int slot, HysteresisTracker profile)

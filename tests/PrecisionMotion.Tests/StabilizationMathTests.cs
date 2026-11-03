@@ -117,3 +117,120 @@ public class MasterCalibrationTests
         Assert.Equal(before, File.ReadAllText(path));
     }
 }
+
+public class TemporalCompensationTests
+{
+    private static readonly double[] BerylPattern = { 6.73, 6.73, 2.588, 2.588 };
+    private static readonly double[] BerylTime = { 0.425, 0.85, 1.275, 1.7, 2.125, 2.55, 2.975 };
+
+    [Fact]
+    public void Envelope_NeverExceedsSustainedLevel()
+    {
+        Assert.Equal(2.588, RecoilEnvelope.Rate(BerylPattern, BerylTime, 0.0), 6);
+        Assert.Equal(2.588, RecoilEnvelope.Rate(BerylPattern, BerylTime, 0.9), 6);
+        Assert.Equal(2.588, RecoilEnvelope.Rate(BerylPattern, BerylTime, 5.0), 6);
+    }
+
+    [Fact]
+    public void Envelope_RisingPatternKeepsItsShape()
+    {
+        double[] rising = { 1, 2, 3, 4 };
+        Assert.Equal(1.0, RecoilEnvelope.Rate(rising, BerylTime, 0.0), 6);
+        Assert.Equal(4.0, RecoilEnvelope.Rate(rising, BerylTime, 5.0), 6);
+    }
+
+    [Fact]
+    public void Envelope_IsMonotonicWhileDecayingAndNeverExceedsPeak()
+    {
+        double previous = double.MaxValue;
+        for (double t = 0; t <= 3.5; t += 0.05)
+        {
+            double rate = RecoilEnvelope.Rate(BerylPattern, BerylTime, t);
+            Assert.True(rate <= previous + 1e-9, $"subiu em t={t}");
+            Assert.True(rate <= RecoilEnvelope.Peak(BerylPattern) + 1e-9);
+            previous = rate;
+        }
+    }
+
+    [Fact]
+    public void NegativePattern_FallsBackToConstantPeak()
+    {
+        double[] m4 = { 1, -5, 2.513, 2.513 };
+
+        Assert.False(RecoilEnvelope.IsTimeShaped(m4));
+        Assert.Equal(5.0, RecoilEnvelope.Rate(m4, BerylTime, 0.0));
+        Assert.Equal(5.0, RecoilEnvelope.Rate(m4, BerylTime, 2.0));
+    }
+
+    [Fact]
+    public void Engine_OnlyBerylUsesTimeShape()
+    {
+        var config = new ConfigProvider();
+        using var engine = new StabilizationEngine(config);
+        var slot1 = typeof(StabilizationEngine).GetProperty("Slot1Profile")!;
+
+        slot1.SetValue(engine, "BERYL");
+        double berylNoBurst = engine.CalculateCurrentStep().VelocityPxPerSec; // pico constante
+        double berylEarly = engine.CalculateCurrentStep(0.0).VelocityPxPerSec;
+        double berylLate = engine.CalculateCurrentStep(3.0).VelocityPxPerSec;
+        Assert.Equal(berylEarly, berylLate, 6);
+        Assert.InRange(berylEarly / berylNoBurst, 0.68, 0.70); // (6.73 + 2.588) / 2 / 6.73
+
+        slot1.SetValue(engine, "M4");
+        Assert.Equal(engine.CalculateCurrentStep().VelocityPxPerSec, engine.CalculateCurrentStep(3.0).VelocityPxPerSec, 6);
+    }
+}
+
+public class TemporalTuningTests
+{
+    private static readonly double[] Pattern = { 6.73, 6.73, 2.588, 2.588 };
+    private static readonly double[] Time = { 0.425, 0.85, 1.275, 1.7, 2.125, 2.55, 2.975 };
+
+    [Fact]
+    public void Flatten_BlendsBetweenPatternShapeAndConstantPeak()
+    {
+        Assert.Equal(2.588, RecoilEnvelope.Rate(Pattern, Time, 3.0, flatten: 0.0), 6);
+        Assert.Equal(6.73, RecoilEnvelope.Rate(Pattern, Time, 3.0, flatten: 1.0), 6);
+        Assert.Equal((6.73 + 2.588) / 2, RecoilEnvelope.Rate(Pattern, Time, 3.0, flatten: 0.5), 6);
+        Assert.Equal((6.73 + 2.588) / 2, RecoilEnvelope.Rate(Pattern, Time, 0.0, flatten: 0.5), 6); // começo limitado ao nível estável
+    }
+
+    [Fact]
+    public void RefreshTuning_PicksUpEditedConfigWithoutRestart()
+    {
+        using var data = new TestDataDir();
+        data.WriteConfig("\"calibragem\":100");
+        data.WriteCalibration();
+        data.WriteResolutionParameters();
+        var config = new ConfigProvider(data.Root);
+        Assert.False(config.RefreshTuningIfChanged()); // nada mudou
+
+        string path = Path.Combine(data.GeneralDir, "config.json");
+        data.WriteConfig("\"calibragem\":180");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(5));
+
+        Assert.True(config.RefreshTuningIfChanged());
+        Assert.Equal(180, config.GlobalConfig.MasterCalibration);
+        Assert.False(config.RefreshTuningIfChanged()); // já aplicado
+    }
+
+    [Fact]
+    public void RefreshTuning_IgnoresHalfWrittenFileAndRecoversNextTime()
+    {
+        using var data = new TestDataDir();
+        data.WriteConfig("\"calibragem\":100");
+        data.WriteCalibration();
+        data.WriteResolutionParameters();
+        var config = new ConfigProvider(data.Root);
+        string path = Path.Combine(data.GeneralDir, "config.json");
+
+        File.WriteAllText(path, "{ \"configs\": [ { \"calibragem\": ");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(5));
+        Assert.False(config.RefreshTuningIfChanged());
+        Assert.Equal(100, config.GlobalConfig.MasterCalibration);
+
+        data.WriteConfig("\"calibragem\":150");
+        Assert.True(config.RefreshTuningIfChanged());
+        Assert.Equal(150, config.GlobalConfig.MasterCalibration);
+    }
+}
